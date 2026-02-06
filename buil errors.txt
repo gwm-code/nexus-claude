@@ -1,0 +1,220 @@
+error[E0432]: unresolved import `oauth2::reqwest::async_http_client`
+ --> src/providers/google.rs:9:5
+  |
+9 |     reqwest::async_http_client,
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^ no `async_http_client` in the root
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+  --> src/providers/openrouter.rs:92:20
+   |
+92 |         let body = serde_json::json!({
+   |                    ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+  --> src/providers/opencode.rs:64:20
+   |
+64 |         let body = serde_json::json!({
+   |                    ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+   --> src/providers/google.rs:101:20
+    |
+101 |         let body = serde_json::json!({
+    |                    ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+  --> src/providers/google.rs:66:13
+   |
+66 |             serde_json::json!({
+   |             ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+  --> src/providers/claude.rs:99:30
+   |
+99 |             body["stream"] = serde_json::json!(true);
+   |                              ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+  --> src/providers/claude.rs:95:30
+   |
+95 |             body["system"] = serde_json::json!(system);
+   |                              ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+  --> src/providers/claude.rs:87:24
+   |
+87 |         let mut body = serde_json::json!({
+   |                        ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+  --> src/providers/claude.rs:49:13
+   |
+49 |             serde_json::json!({
+   |             ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+
+warning: unused imports: `AuthUrl`, `ClientId`, `ClientSecret`, `CsrfToken`, `RedirectUrl`, `Scope`, `TokenResponse`, and `TokenUrl`
+ --> src/providers/google.rs:6:5
+  |
+6 |     AuthUrl, ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope,
+  |     ^^^^^^^  ^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^^^  ^^^^^^^^^^^  ^^^^^
+7 |     TokenResponse, TokenUrl,
+  |     ^^^^^^^^^^^^^  ^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `BufRead` and `Write`
+  --> src/providers/google.rs:12:15
+   |
+12 | use std::io::{BufRead, Write};
+   |               ^^^^^^^  ^^^^^
+
+warning: unused imports: `Message` and `Role`
+ --> src/providers/opencode.rs:3:63
+  |
+3 | use crate::providers::{CompletionRequest, CompletionResponse, Message, Provider, ProviderInfo, Role, Usage};
+  |                                                               ^^^^^^^                          ^^^^
+
+warning: unused imports: `Message` and `Role`
+ --> src/providers/openrouter.rs:3:63
+  |
+3 | use crate::providers::{CompletionRequest, CompletionResponse, Message, Provider, ProviderInfo, Role, Usage};
+  |                                                               ^^^^^^^                          ^^^^
+
+warning: unused import: `NexusConfig`
+ --> src/main.rs:6:29
+  |
+6 | use config::{ConfigManager, NexusConfig, ProviderConfig, ProviderType};
+  |                             ^^^^^^^^^^^
+
+error[E0282]: type annotations needed
+  --> src/providers/openrouter.rs:70:51
+   |
+70 |             .filter_map(|m| m["id"].as_str().map(|s| s.to_string()))
+   |                                                   ^  - type must be known at this point
+   |
+help: consider giving this closure parameter an explicit type
+   |
+70 |             .filter_map(|m| m["id"].as_str().map(|s: /* Type */| s.to_string()))
+   |                                                    ++++++++++++
+
+error[E0282]: type annotations needed
+   --> src/providers/claude.rs:128:19
+    |
+128 |             .map(|s| s.to_string());
+    |                   ^  - type must be known at this point
+    |
+help: consider giving this closure parameter an explicit type
+    |
+128 |             .map(|s: /* Type */| s.to_string());
+    |                    ++++++++++++
+
+error[E0282]: type annotations needed
+   --> src/providers/google.rs:139:19
+    |
+139 |             .map(|s| s.to_string());
+    |                   ^  - type must be known at this point
+    |
+help: consider giving this closure parameter an explicit type
+    |
+139 |             .map(|s: /* Type */| s.to_string());
+    |                    ++++++++++++
+
+error[E0282]: type annotations needed
+  --> src/providers/opencode.rs:97:19
+   |
+97 |             .map(|s| s.to_string());
+   |                   ^  - type must be known at this point
+   |
+help: consider giving this closure parameter an explicit type
+   |
+97 |             .map(|s: /* Type */| s.to_string());
+   |                    ++++++++++++
+
+error[E0282]: type annotations needed
+   --> src/providers/openrouter.rs:125:19
+    |
+125 |             .map(|s| s.to_string());
+    |                   ^  - type must be known at this point
+    |
+help: consider giving this closure parameter an explicit type
+    |
+125 |             .map(|s: /* Type */| s.to_string());
+    |                    ++++++++++++
+
+warning: unused import: `Provider`
+ --> src/main.rs:8:88
+  |
+8 | use providers::{create_provider, list_available_providers, CompletionRequest, Message, Provider, Role};
+  |                                                                                        ^^^^^^^^
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+  --> src/error.rs:24:18
+   |
+24 |     Json(#[from] serde_json::Error),
+   |                  ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+   |
+   = help: if you wanted to use a crate named `serde_json`, use `cargo add serde_json` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+  --> src/providers/claude.rs:47:61
+   |
+47 |     fn convert_messages(&self, messages: &[Message]) -> Vec<serde_json::Value> {
+   |                                                             ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+   |
+   = help: if you wanted to use a crate named `serde_json`, use `cargo add serde_json` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+   --> src/providers/claude.rs:119:19
+    |
+119 |         let data: serde_json::Value = response.json().await?;
+    |                   ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+    |
+    = help: if you wanted to use a crate named `serde_json`, use `cargo add serde_json` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+  --> src/providers/google.rs:64:61
+   |
+64 |     fn convert_messages(&self, messages: &[Message]) -> Vec<serde_json::Value> {
+   |                                                             ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+   |
+   = help: if you wanted to use a crate named `serde_json`, use `cargo add serde_json` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+   --> src/providers/google.rs:130:19
+    |
+130 |         let data: serde_json::Value = response.json().await?;
+    |                   ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+    |
+    = help: if you wanted to use a crate named `serde_json`, use `cargo add serde_json` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+  --> src/providers/opencode.rs:88:19
+   |
+88 |         let data: serde_json::Value = response.json().await?;
+   |                   ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+   |
+   = help: if you wanted to use a crate named `serde_json`, use `cargo add serde_json` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+  --> src/providers/openrouter.rs:65:19
+   |
+65 |         let data: serde_json::Value = response.json().await?;
+   |                   ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+   |
+   = help: if you wanted to use a crate named `serde_json`, use `cargo add serde_json` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+   --> src/providers/openrouter.rs:116:19
+    |
+116 |         let data: serde_json::Value = response.json().await?;
+    |                   ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+    |
+    = help: if you wanted to use a crate named `serde_json`, use `cargo add serde_json` to add it to your `Cargo.toml`
+
+error[E0433]: failed to resolve: use of unresolved module or unlinked crate `serde_json`
+  --> src/providers/mod.rs:40:46
+   |
+40 |     pub extra_params: Option<HashMap<String, serde_json::Value>>,
+   |                                              ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+   |
+   = help: if you wanted to use a crate named `serde_json`, use `cargo add serde_json` to add it to your `Cargo.toml`

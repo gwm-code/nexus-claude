@@ -1,0 +1,16 @@
+nexus> shadow
+Enter command to run in sandbox: ls
+Running in sandbox: ls
+
+Sandbox Result:
+  Success: false
+  Exit Code: 125
+  Duration: 1427ms
+
+  stderr:
+    Unable to find image 'nexus-sandbox:latest' locally
+    docker: Error response from daemon: pull access denied for nexus-sandbox, repository does not exist or may require 'docker login': denied: requested access to the resource is denied
+    
+    Run 'docker run --help' for more information
+
+nexus> 
