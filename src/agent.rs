@@ -1,9 +1,13 @@
 use crate::context::FileAccessTracker;
-use crate::error::{NexusError, Result};
-use crate::providers::{CompletionRequest, CompletionResponse, Message, Role};
+use crate::error::Result;
+use tracing::{info, warn};
+use crate::providers::{CompletionRequest, Message, Role};
+use crate::providers::retry::retry_with_backoff;
+use crate::providers::token_budget::TokenBudget;
 use crate::sandbox::SandboxManager;
 use crate::sandbox::hydration::{Hydrator, HydrationPlan, FileChange};
 use crate::executor::tools::{ToolCall, ToolResult, parse_tool_calls};
+use std::time::Duration;
 
 /// Maximum tool-calling turns before forcing termination
 const MAX_TURNS: usize = 20;
@@ -38,19 +42,43 @@ impl Agent {
         provider: &dyn crate::providers::Provider,
         model: String,
     ) -> Result<String> {
+        let mut budget = TokenBudget::default();
+
         // Agent loop: keep going until no more tool calls (with safety limit)
-        for _turn in 0..MAX_TURNS {
+        for turn in 0..MAX_TURNS {
+            // Check token budget before sending
+            if !budget.can_continue() {
+                warn!(used = budget.used_input_tokens + budget.used_output_tokens, remaining = budget.remaining(), "Token budget exhausted");
+                return Ok(format!("[Agent stopped: token budget exhausted after {} turns. Used {} tokens.]", turn, budget.used_input_tokens + budget.used_output_tokens));
+            }
+
+            // Estimate input tokens
+            let input_estimate: u32 = messages.iter().map(|m| TokenBudget::estimate_tokens(&m.content)).sum();
+
             // Send request to AI
             let request = CompletionRequest {
                 model: model.clone(),
                 messages: messages.clone(),
                 temperature: Some(0.7),
-                max_tokens: Some(4096),
+                max_tokens: Some(budget.dynamic_max_tokens()),
                 stream: Some(false),
                 extra_params: None,
             };
 
-            let response = provider.complete(request).await?;
+            let response = retry_with_backoff(3, Duration::from_secs(1), || {
+                let req = request.clone();
+                async move { provider.complete(req).await }
+            })
+            .await?;
+
+            // Record token usage
+            let output_estimate = TokenBudget::estimate_tokens(&response.content);
+            if let Some(ref usage) = response.usage {
+                budget.record_usage(usage.prompt_tokens, usage.completion_tokens);
+            } else {
+                budget.record_usage(input_estimate, output_estimate);
+            }
+            info!(input_tokens = budget.used_input_tokens, output_tokens = budget.used_output_tokens, remaining = budget.remaining(), "Token usage");
 
             // Check if response has tool calls
             let tool_calls = parse_tool_calls(&response.content);
@@ -66,7 +94,7 @@ impl Agent {
             }
 
             // Execute tools
-            println!("\n[SHADOW RUN] Executing {} tool(s)...", tool_calls.len());
+            info!(count = tool_calls.len(), "Executing tools");
             let mut tool_results = Vec::new();
 
             for tool_call in tool_calls {
@@ -118,7 +146,7 @@ impl Agent {
             }
 
             // Loop continues - AI will see tool results and respond
-            println!("\n[AGENT] AI analyzing results...");
+            info!("AI analyzing tool results");
         }
 
         // Safety: if we exhausted MAX_TURNS without a final response

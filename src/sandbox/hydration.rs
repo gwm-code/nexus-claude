@@ -54,7 +54,13 @@ impl Hydrator {
         for entry in fs::read_dir(current_sandbox)? {
             let entry = entry?;
             let path = entry.path();
-            let relative_path = path.strip_prefix(sandbox_root).unwrap();
+            let relative_path = path.strip_prefix(sandbox_root).map_err(|_| {
+                NexusError::Configuration(format!(
+                    "Path {} is not under sandbox root {}",
+                    path.display(),
+                    sandbox_root.display()
+                ))
+            })?;
             let host_path = host_dir.join(relative_path);
 
             if path.is_dir() {
@@ -193,7 +199,7 @@ impl Hydrator {
 
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
 
         let backup_name = format!("{}.{}", filename.to_string_lossy(), timestamp);

@@ -12,7 +12,7 @@ pub mod consolidation;
 
 pub use event_store::MemoryEvent;
 
-use crate::error::Result;
+use crate::error::{NexusError, Result};
 use std::path::PathBuf;
 use std::collections::HashMap;
 use std::time::{SystemTime, Duration};
@@ -54,7 +54,7 @@ impl MemorySystem {
         }).await?;
 
         // Add project entity to graph
-        self.graph.lock().unwrap().add_entity(graph::Entity {
+        self.graph.lock().map_err(|_| NexusError::Configuration("Graph mutex poisoned".to_string()))?.add_entity(graph::Entity {
             id: project_name.to_string(),
             entity_type: "project".to_string(),
             properties: HashMap::from([
@@ -104,7 +104,7 @@ impl MemorySystem {
         value: &str,
     ) -> Result<()> {
         // Store in graph as entity property
-        self.graph.lock().unwrap().update_entity_property(
+        self.graph.lock().map_err(|_| NexusError::Configuration("Graph mutex poisoned".to_string()))?.update_entity_property(
             entity,
             fact_type,
             value,
@@ -189,7 +189,7 @@ impl MemorySystem {
         }
 
         // Search graph (relationships)
-        let graph_results = self.graph.lock().unwrap().query_entities(query).await?;
+        let graph_results = self.graph.lock().map_err(|_| NexusError::Configuration("Graph mutex poisoned".to_string()))?.query_entities(query).await?;
         for entity in graph_results {
             results.push(types::MemoryResult::Graph {
                 entity: entity.id,
@@ -214,7 +214,7 @@ impl MemorySystem {
                 types::MemoryResult::Semantic { score, .. } => *score,
                 _ => 0.5,
             };
-            score_b.partial_cmp(&score_a).unwrap()
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
         });
 
         Ok(results.into_iter().take(limit).collect())
@@ -228,7 +228,7 @@ impl MemorySystem {
         let relevant_memories = self.search(query, 10).await?;
         
         // Get project facts
-        let project_facts = self.graph.lock().unwrap().get_project_facts().await?;
+        let project_facts = self.graph.lock().map_err(|_| NexusError::Configuration("Graph mutex poisoned".to_string()))?.get_project_facts().await?;
         
         // Get recent procedures
         let procedures = self.vector.search("procedure workflow", 5).await?;
@@ -253,7 +253,7 @@ impl MemorySystem {
     pub fn get_stats(&self) -> types::MemoryStats {
         types::MemoryStats {
             events_count: self.event_store.len(),
-            graph_entities: self.graph.lock().unwrap().entity_count(),
+            graph_entities: self.graph.lock().map(|g| g.entity_count()).unwrap_or(0),
             vector_documents: self.vector.document_count(),
             session_id: self.session_id.clone(),
             total_memories: self.event_store.len(),

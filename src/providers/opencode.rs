@@ -1,6 +1,6 @@
 use crate::config::ProviderConfig;
 use crate::error::{NexusError, Result};
-use crate::providers::{CompletionRequest, CompletionResponse, Message, Provider, ProviderInfo, Role, Usage};
+use crate::providers::{CompletionRequest, CompletionResponse, Provider, ProviderInfo, StreamChunk, Usage};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json;
@@ -135,10 +135,80 @@ impl Provider for OpencodeProvider {
         })
     }
 
+    async fn complete_stream(
+        &self,
+        request: CompletionRequest,
+        tx: tokio::sync::mpsc::Sender<StreamChunk>,
+    ) -> Result<()> {
+        if !self.is_authenticated() {
+            return Err(NexusError::Authentication("OpenCode API key not configured".into()));
+        }
+
+        let api_key = self.api_key.as_ref().unwrap();
+        let body = serde_json::json!({
+            "model": request.model,
+            "messages": request.messages,
+            "temperature": request.temperature.unwrap_or(0.7),
+            "max_tokens": request.max_tokens,
+            "stream": true,
+        });
+
+        let response = self.client
+            .post(format!("{}/chat/completions", self.base_url))
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(NexusError::ApiRequest(format!("OpenCode streaming error: {}", error_text)));
+        }
+
+        // Parse SSE stream
+        use futures_util::StreamExt;
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+
+        while let Some(chunk) = stream.next().await {
+            let bytes = chunk.map_err(|e| NexusError::ApiRequest(e.to_string()))?;
+            buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+            // Process complete SSE lines
+            while let Some(pos) = buffer.find('\n') {
+                let line = buffer[..pos].trim().to_string();
+                buffer = buffer[pos + 1..].to_string();
+
+                if line.starts_with("data: ") {
+                    let data = &line[6..];
+                    if data == "[DONE]" {
+                        let _ = tx.send(StreamChunk::Done).await;
+                        return Ok(());
+                    }
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                        if let Some(delta) = json["choices"][0]["delta"]["content"].as_str() {
+                            if !delta.is_empty() {
+                                let _ = tx.send(StreamChunk::ContentDelta(delta.to_string())).await;
+                            }
+                        }
+                        if let Some(usage) = json.get("usage") {
+                            let _ = tx.send(StreamChunk::Usage(Usage {
+                                prompt_tokens: usage["prompt_tokens"].as_u64().unwrap_or(0) as u32,
+                                completion_tokens: usage["completion_tokens"].as_u64().unwrap_or(0) as u32,
+                                total_tokens: usage["total_tokens"].as_u64().unwrap_or(0) as u32,
+                            })).await;
+                        }
+                    }
+                }
+            }
+        }
+
+        let _ = tx.send(StreamChunk::Done).await;
+        Ok(())
+    }
+
     async fn authenticate(&mut self) -> Result<()> {
-        // OpenCode uses API key authentication
-        // In a real implementation, this would prompt the user for their API key
-        // and store it securely using the keyring crate
         Ok(())
     }
 

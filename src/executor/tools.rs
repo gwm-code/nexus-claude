@@ -168,7 +168,9 @@ pub fn parse_tool_calls(response: &str) -> Vec<ToolCall> {
     let mut tool_calls = Vec::new();
 
     // First, try to extract JSON from code blocks (AI often wraps in ```json)
-    let code_block_regex = regex::Regex::new(r"```(?:json)?\n(.*?)```").unwrap();
+    use std::sync::LazyLock;
+    static CODE_BLOCK_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"```(?:json)?\n(.*?)```").expect("invalid regex"));
+    let code_block_regex = &*CODE_BLOCK_RE;
     for cap in code_block_regex.captures_iter(response) {
         if let Some(json_str) = cap.get(1) {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_str.as_str().trim()) {

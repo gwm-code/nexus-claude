@@ -7,6 +7,7 @@ mod memory;
 mod mcp;
 mod providers;
 mod sandbox;
+mod secret_store;
 mod swarm;
 mod watcher;
 
@@ -65,6 +66,46 @@ enum Commands {
     WatcherStatus,
     /// List configured providers
     Providers,
+    /// Manage configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Get a config value
+    Get {
+        /// Key to get (e.g., "provider", "model", "all")
+        key: String,
+    },
+    /// Set a config value
+    Set {
+        /// Key to set (e.g., "provider", "model", "base-url")
+        key: String,
+        /// Value to set
+        value: String,
+    },
+    /// Set API key securely (stored in OS keyring)
+    SetApiKey {
+        /// Provider name
+        provider: String,
+        /// API key value
+        key: String,
+    },
+    /// List available models for a provider
+    ListModels {
+        /// Provider name
+        provider: String,
+    },
+    /// Test connection to a provider
+    TestConnection {
+        /// Provider name
+        provider: String,
+    },
+    /// Migrate plaintext secrets to keyring
+    MigrateSecrets,
 }
 
 /// JSON envelope for non-interactive output
@@ -78,6 +119,24 @@ fn json_output(success: bool, data: serde_json::Value, error: Option<&str>) -> S
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize structured logging
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("nexus=info"));
+
+    if std::env::var("NEXUS_LOG_JSON").is_ok() {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(env_filter)
+            .with_target(true)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_target(false)
+            .compact()
+            .init();
+    }
+
     let cli = Cli::parse();
 
     // If a subcommand was provided, run non-interactively
@@ -318,6 +377,373 @@ async fn run_command(command: Commands, json_mode: bool) -> Result<()> {
                         println!("  * {} (default)", provider);
                     } else {
                         println!("    {}", provider);
+                    }
+                }
+            }
+        }
+        Commands::Config { action } => {
+            let mut config_manager = ConfigManager::new()?;
+            match action {
+                ConfigAction::Get { key } => {
+                    match key.as_str() {
+                        "all" => {
+                            let config = config_manager.get();
+                            // Build a sanitized view: mask raw API keys
+                            let mut providers_view = serde_json::Map::new();
+                            for (name, prov) in &config.providers {
+                                let api_key_display = match &prov.api_key {
+                                    Some(val) if secret_store::parse_sentinel(val).is_some() => {
+                                        "****configured**** (keyring)".to_string()
+                                    }
+                                    Some(_) => "****configured****".to_string(),
+                                    None => "not set".to_string(),
+                                };
+                                providers_view.insert(name.clone(), serde_json::json!({
+                                    "provider_type": format!("{:?}", prov.provider_type),
+                                    "api_key": api_key_display,
+                                    "base_url": prov.base_url,
+                                    "default_model": prov.default_model,
+                                    "timeout_secs": prov.timeout_secs,
+                                }));
+                            }
+                            let data = serde_json::json!({
+                                "default_provider": config.default_provider,
+                                "providers": providers_view,
+                                "ui": {
+                                    "show_diff_preview": config.ui.show_diff_preview,
+                                    "confirm_dangerous_commands": config.ui.confirm_dangerous_commands,
+                                    "command_timeout_secs": config.ui.command_timeout_secs,
+                                },
+                            });
+                            if json_mode {
+                                println!("{}", json_output(true, data, None));
+                            } else {
+                                println!("Current configuration:");
+                                println!("  Default provider: {}", config.default_provider.as_deref().unwrap_or("not set"));
+                                println!("  Providers:");
+                                for (name, prov) in &config.providers {
+                                    let api_key_display = match &prov.api_key {
+                                        Some(val) if secret_store::parse_sentinel(val).is_some() => {
+                                            "****configured**** (keyring)"
+                                        }
+                                        Some(_) => "****configured****",
+                                        None => "not set",
+                                    };
+                                    println!("    {}:", name);
+                                    println!("      type: {:?}", prov.provider_type);
+                                    println!("      api_key: {}", api_key_display);
+                                    println!("      base_url: {}", prov.base_url.as_deref().unwrap_or("default"));
+                                    println!("      default_model: {}", prov.default_model.as_deref().unwrap_or("not set"));
+                                    println!("      timeout_secs: {}", prov.timeout_secs.map(|t| t.to_string()).unwrap_or_else(|| "default".to_string()));
+                                }
+                                println!("  UI:");
+                                println!("    show_diff_preview: {}", config.ui.show_diff_preview);
+                                println!("    confirm_dangerous_commands: {}", config.ui.confirm_dangerous_commands);
+                                println!("    command_timeout_secs: {}", config.ui.command_timeout_secs);
+                            }
+                        }
+                        "provider" => {
+                            let default = config_manager.get().default_provider.clone();
+                            if json_mode {
+                                println!("{}", json_output(true, serde_json::json!({
+                                    "provider": default,
+                                }), None));
+                            } else {
+                                println!("{}", default.as_deref().unwrap_or("not set"));
+                            }
+                        }
+                        "model" => {
+                            let config = config_manager.get();
+                            let model = config.default_provider.as_ref()
+                                .and_then(|p| config.providers.get(p))
+                                .and_then(|pc| pc.default_model.clone());
+                            if json_mode {
+                                println!("{}", json_output(true, serde_json::json!({
+                                    "model": model,
+                                }), None));
+                            } else {
+                                println!("{}", model.as_deref().unwrap_or("not set"));
+                            }
+                        }
+                        other => {
+                            let msg = format!("Unknown config key: '{}'. Valid keys: all, provider, model", other);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                ConfigAction::Set { key, value } => {
+                    match key.as_str() {
+                        "provider" => {
+                            // Validate the provider exists in config
+                            if config_manager.get_provider(&value).is_none() {
+                                let msg = format!("Provider '{}' is not configured. Use 'nexus providers' to list configured providers.", value);
+                                if json_mode {
+                                    println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                                } else {
+                                    eprintln!("{}", msg);
+                                }
+                                std::process::exit(1);
+                            }
+                            config_manager.get_mut().default_provider = Some(value.clone());
+                            config_manager.save()?;
+                            if json_mode {
+                                println!("{}", json_output(true, serde_json::json!({
+                                    "provider": value,
+                                }), None));
+                            } else {
+                                println!("Default provider set to: {}", value);
+                            }
+                        }
+                        "model" => {
+                            let provider_name = config_manager.get().default_provider.clone()
+                                .ok_or_else(|| anyhow::anyhow!("No default provider configured. Set one first with: nexus config set provider <name>"))?;
+                            if let Some(provider_config) = config_manager.get_mut().providers.get_mut(&provider_name) {
+                                provider_config.default_model = Some(value.clone());
+                                config_manager.save()?;
+                                if json_mode {
+                                    println!("{}", json_output(true, serde_json::json!({
+                                        "provider": provider_name,
+                                        "model": value,
+                                    }), None));
+                                } else {
+                                    println!("Default model for '{}' set to: {}", provider_name, value);
+                                }
+                            } else {
+                                let msg = format!("Provider '{}' not found in configuration", provider_name);
+                                if json_mode {
+                                    println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                                } else {
+                                    eprintln!("{}", msg);
+                                }
+                                std::process::exit(1);
+                            }
+                        }
+                        "base-url" => {
+                            let provider_name = config_manager.get().default_provider.clone()
+                                .ok_or_else(|| anyhow::anyhow!("No default provider configured. Set one first with: nexus config set provider <name>"))?;
+                            if let Some(provider_config) = config_manager.get_mut().providers.get_mut(&provider_name) {
+                                provider_config.base_url = Some(value.clone());
+                                config_manager.save()?;
+                                if json_mode {
+                                    println!("{}", json_output(true, serde_json::json!({
+                                        "provider": provider_name,
+                                        "base_url": value,
+                                    }), None));
+                                } else {
+                                    println!("Base URL for '{}' set to: {}", provider_name, value);
+                                }
+                            } else {
+                                let msg = format!("Provider '{}' not found in configuration", provider_name);
+                                if json_mode {
+                                    println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                                } else {
+                                    eprintln!("{}", msg);
+                                }
+                                std::process::exit(1);
+                            }
+                        }
+                        other => {
+                            let msg = format!("Unknown config key: '{}'. Valid keys: provider, model, base-url", other);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                ConfigAction::SetApiKey { provider, key } => {
+                    match config_manager.set_api_key_secure(&provider, &key) {
+                        Ok(()) => {
+                            if json_mode {
+                                println!("{}", json_output(true, serde_json::json!({
+                                    "provider": provider,
+                                    "status": "api_key_stored_in_keyring",
+                                }), None));
+                            } else {
+                                println!("API key for '{}' stored securely in OS keyring.", provider);
+                            }
+                        }
+                        Err(e) => {
+                            let msg = format!("Failed to store API key: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                ConfigAction::ListModels { provider } => {
+                    let models: Vec<&str> = match provider.to_lowercase().as_str() {
+                        "claude" => vec![
+                            "claude-sonnet-4-5-20250929",
+                            "claude-opus-4-6",
+                            "claude-haiku-4-5-20251001",
+                        ],
+                        "opencode" => vec![
+                            "kimi-k2.5",
+                            "deepseek-v3",
+                        ],
+                        "openrouter" => vec![
+                            "anthropic/claude-sonnet-4-5",
+                            "openai/gpt-4o",
+                            "google/gemini-2.5-pro",
+                        ],
+                        "google" => vec![
+                            "gemini-2.5-pro",
+                            "gemini-2.5-flash",
+                        ],
+                        _ => {
+                            let msg = format!("Unknown provider: '{}'. Valid providers: claude, opencode, openrouter, google", provider);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    };
+                    if json_mode {
+                        println!("{}", json_output(true, serde_json::json!({
+                            "provider": provider,
+                            "models": models,
+                        }), None));
+                    } else {
+                        println!("Available models for '{}':", provider);
+                        for model in &models {
+                            println!("  {}", model);
+                        }
+                    }
+                }
+                ConfigAction::TestConnection { provider } => {
+                    // Load the provider config with resolved secrets
+                    let provider_config = match config_manager.get_provider_resolved(&provider) {
+                        Ok(Some(cfg)) => cfg,
+                        Ok(None) => {
+                            let msg = format!("Provider '{}' is not configured.", provider);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                        Err(e) => {
+                            let msg = format!("Failed to resolve provider secrets: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    };
+
+                    let mut prov = match create_provider(&provider_config.provider_type, &provider_config) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            let msg = format!("Failed to create provider: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    };
+
+                    if !prov.is_authenticated() {
+                        if let Err(e) = prov.authenticate().await {
+                            let msg = format!("Authentication failed: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+
+                    let model = provider_config.default_model
+                        .unwrap_or_else(|| prov.info().default_model.clone());
+
+                    let request = providers::CompletionRequest {
+                        model: model.clone(),
+                        messages: vec![
+                            Message {
+                                role: Role::User,
+                                content: "Say hello in one word".to_string(),
+                                name: None,
+                            },
+                        ],
+                        temperature: Some(0.0),
+                        max_tokens: Some(10),
+                        stream: Some(false),
+                        extra_params: None,
+                    };
+
+                    match prov.complete(request).await {
+                        Ok(response) => {
+                            if json_mode {
+                                println!("{}", json_output(true, serde_json::json!({
+                                    "provider": provider,
+                                    "model": model,
+                                    "status": "connected",
+                                    "response": response.content,
+                                }), None));
+                            } else {
+                                println!("Connection to '{}' successful!", provider);
+                                println!("  Model: {}", model);
+                                println!("  Response: {}", response.content);
+                            }
+                        }
+                        Err(e) => {
+                            let msg = format!("Connection test failed: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::json!({
+                                    "provider": provider,
+                                    "model": model,
+                                    "status": "failed",
+                                }), Some(&msg)));
+                            } else {
+                                eprintln!("Connection to '{}' failed: {}", provider, e);
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                ConfigAction::MigrateSecrets => {
+                    match config_manager.migrate_secrets() {
+                        Ok(count) => {
+                            if json_mode {
+                                println!("{}", json_output(true, serde_json::json!({
+                                    "migrated": count,
+                                }), None));
+                            } else {
+                                if count == 0 {
+                                    println!("No plaintext secrets found to migrate.");
+                                } else {
+                                    println!("Migrated {} secret(s) to OS keyring.", count);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let msg = format!("Secret migration failed: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
                     }
                 }
             }

@@ -7,6 +7,19 @@ pub mod claude;
 pub mod google;
 pub mod opencode;
 pub mod openrouter;
+pub mod retry;
+pub mod token_budget;
+
+/// A chunk from a streaming completion response
+#[derive(Debug, Clone)]
+pub enum StreamChunk {
+    /// Incremental content delta
+    ContentDelta(String),
+    /// Usage information (sent at the end)
+    Usage(Usage),
+    /// Stream is done
+    Done,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
@@ -83,13 +96,28 @@ pub struct ProviderInfo {
 #[async_trait]
 pub trait Provider: Send + Sync {
     fn info(&self) -> ProviderInfo;
-    
+
     async fn complete(&self, request: CompletionRequest) -> Result<CompletionResponse>;
-    
+
+    /// Stream a completion response. Default wraps `complete()` as a single chunk.
+    async fn complete_stream(
+        &self,
+        request: CompletionRequest,
+        tx: tokio::sync::mpsc::Sender<StreamChunk>,
+    ) -> Result<()> {
+        let resp = self.complete(request).await?;
+        let _ = tx.send(StreamChunk::ContentDelta(resp.content)).await;
+        if let Some(usage) = resp.usage {
+            let _ = tx.send(StreamChunk::Usage(usage)).await;
+        }
+        let _ = tx.send(StreamChunk::Done).await;
+        Ok(())
+    }
+
     async fn authenticate(&mut self) -> Result<()>;
-    
+
     async fn refresh_auth(&mut self) -> Result<()>;
-    
+
     fn is_authenticated(&self) -> bool;
 }
 

@@ -2,11 +2,14 @@ use crate::context::FileAccessTracker;
 use crate::error::Result;
 use crate::executor::tools::{ToolCall, ToolResult, create_tool_system_prompt, parse_tool_calls};
 use crate::providers::{CompletionRequest, Message, Provider, Role};
+use crate::providers::retry::retry_with_backoff;
+use crate::providers::token_budget::TokenBudget;
 use crate::sandbox::SandboxManager;
 use crate::sandbox::hydration::{FileChange, HydrationPlan, Hydrator};
 use crate::swarm::architect::Task;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Maximum tool-calling turns before forcing termination
 const MAX_TURNS: usize = 20;
@@ -124,19 +127,42 @@ impl WorkerAgent {
         ];
 
         let mut final_response = String::new();
+        let mut budget = TokenBudget::default();
 
         // Multi-turn tool calling loop
         for turn in 0..MAX_TURNS {
+            if !budget.can_continue() {
+                eprintln!("  [WORKER {:?}] Token budget exhausted after {} turns", self.worker_type, turn);
+                break;
+            }
+
             let request = CompletionRequest {
                 model: self.model.clone(),
                 messages: messages.clone(),
                 temperature: Some(0.7),
-                max_tokens: Some(4096),
+                max_tokens: Some(budget.dynamic_max_tokens()),
                 stream: Some(false),
                 extra_params: None,
             };
 
-            let response = self.provider.complete(request).await?;
+            let response = {
+                let provider = self.provider.clone();
+                retry_with_backoff(3, Duration::from_secs(1), || {
+                    let req = request.clone();
+                    let p = provider.clone();
+                    async move { p.complete(req).await }
+                })
+                .await?
+            };
+
+            // Record token usage
+            let input_est: u32 = messages.iter().map(|m| TokenBudget::estimate_tokens(&m.content)).sum();
+            let output_est = TokenBudget::estimate_tokens(&response.content);
+            if let Some(ref usage) = response.usage {
+                budget.record_usage(usage.prompt_tokens, usage.completion_tokens);
+            } else {
+                budget.record_usage(input_est, output_est);
+            }
 
             // Check for tool calls
             let tool_calls = parse_tool_calls(&response.content);

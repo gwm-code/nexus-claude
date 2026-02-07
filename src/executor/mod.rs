@@ -249,11 +249,11 @@ impl AgentExecutor {
 
 /// Remove JSON tool calls and code blocks from text to get clean content
 fn remove_tool_calls_from_text(text: &str) -> String {
-    use regex::Regex;
-    
+    use std::sync::LazyLock;
+    static CODE_BLOCK_RE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"```(?:json)?\n.*?```").expect("invalid regex"));
+
     // Remove code blocks with JSON
-    let code_block_regex = Regex::new(r"```(?:json)?\n.*?```").unwrap();
-    let text = code_block_regex.replace_all(text, "");
+    let text = CODE_BLOCK_RE.replace_all(text, "");
     
     // Remove raw JSON objects that look like tool calls
     // This is more aggressive - removes lines with {"tool": ...}

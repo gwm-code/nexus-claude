@@ -5,6 +5,7 @@
 //! MCP server (to expose Nexus capabilities to other MCP clients).
 
 pub mod client;
+pub mod command_validator;
 pub mod server;
 pub mod tools;
 pub mod resources;

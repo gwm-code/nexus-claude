@@ -1,5 +1,6 @@
 use crate::error::{NexusError, Result};
 use crate::mcp::{Tool, ToolResult, ToolContent};
+use crate::mcp::command_validator::validate_command;
 use serde_json::json;
 use std::process::Command as StdCommand;
 use tokio::fs;
@@ -265,17 +266,14 @@ async fn shell_execute(args: serde_json::Value) -> Result<ToolResult> {
         .unwrap_or(60)
         .min(300) as u64;
 
-    // Safety checks for dangerous commands
-    let dangerous = ["rm -rf /", "> /dev/sda", "mkfs", "dd if=/dev/zero"];
-    for d in &dangerous {
-        if command.contains(d) {
-            return Ok(ToolResult {
-                content: vec![ToolContent::Text { 
-                    text: format!("Blocked dangerous command: {}", d)
-                }],
-                is_error: Some(true),
-            });
-        }
+    // Validate command against allowlist and blocklist
+    if let Err(e) = validate_command(command) {
+        return Ok(ToolResult {
+            content: vec![ToolContent::Text {
+                text: format!("Command blocked: {}", e)
+            }],
+            is_error: Some(true),
+        });
     }
 
     let output = tokio::time::timeout(

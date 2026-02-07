@@ -1,4 +1,5 @@
 use crate::error::{NexusError, Result};
+use crate::secret_store;
 use config::{Config, Environment, File};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -106,6 +107,14 @@ impl ConfigManager {
         fs::write(&self.config_path, toml)
             .map_err(|e| NexusError::Configuration(format!("Failed to write config: {}", e)))?;
 
+        // Restrict file permissions to owner-only (0600) on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = fs::Permissions::from_mode(0o600);
+            let _ = fs::set_permissions(&self.config_path, perms);
+        }
+
         Ok(())
     }
 
@@ -122,8 +131,78 @@ impl ConfigManager {
         self.save()
     }
 
+    /// Add a provider with its API key stored securely in the OS keyring.
+    /// The config file will contain a sentinel value instead of the plaintext key.
+    pub fn add_provider_secure(&mut self, name: String, mut provider: ProviderConfig) -> Result<()> {
+        // Migrate API key to keyring if possible
+        if let Some(ref api_key) = provider.api_key {
+            let key_name = format!("provider.{}.api_key", name);
+            if let Some(sentinel) = secret_store::migrate_secret(&key_name, api_key) {
+                provider.api_key = Some(sentinel);
+            }
+        }
+
+        // Migrate OAuth tokens
+        if let Some(ref token) = provider.oauth_token {
+            let key_name = format!("provider.{}.oauth_token", name);
+            if let Some(sentinel) = secret_store::migrate_secret(&key_name, token) {
+                provider.oauth_token = Some(sentinel);
+            }
+        }
+        if let Some(ref secret) = provider.oauth_client_secret {
+            let key_name = format!("provider.{}.oauth_client_secret", name);
+            if let Some(sentinel) = secret_store::migrate_secret(&key_name, secret) {
+                provider.oauth_client_secret = Some(sentinel);
+            }
+        }
+        if let Some(ref refresh) = provider.oauth_refresh_token {
+            let key_name = format!("provider.{}.oauth_refresh_token", name);
+            if let Some(sentinel) = secret_store::migrate_secret(&key_name, refresh) {
+                provider.oauth_refresh_token = Some(sentinel);
+            }
+        }
+
+        self.config.providers.insert(name, provider);
+        self.save()
+    }
+
+    /// Store an API key securely for an existing provider
+    pub fn set_api_key_secure(&mut self, provider_name: &str, api_key: &str) -> Result<()> {
+        let provider = self.config.providers.get_mut(provider_name).ok_or_else(|| {
+            NexusError::ProviderNotConfigured(provider_name.to_string())
+        })?;
+
+        let key_name = format!("provider.{}.api_key", provider_name);
+        secret_store::store_secret(&key_name, api_key)?;
+        provider.api_key = Some(secret_store::make_sentinel(&key_name));
+        self.save()
+    }
+
     pub fn get_provider(&self, name: &str) -> Option<&ProviderConfig> {
         self.config.providers.get(name)
+    }
+
+    /// Get a provider config with secrets resolved from keyring
+    pub fn get_provider_resolved(&self, name: &str) -> Result<Option<ProviderConfig>> {
+        match self.config.providers.get(name) {
+            None => Ok(None),
+            Some(provider) => {
+                let mut resolved = provider.clone();
+                if let Some(ref val) = resolved.api_key {
+                    resolved.api_key = Some(secret_store::resolve_secret(val)?);
+                }
+                if let Some(ref val) = resolved.oauth_token {
+                    resolved.oauth_token = Some(secret_store::resolve_secret(val)?);
+                }
+                if let Some(ref val) = resolved.oauth_client_secret {
+                    resolved.oauth_client_secret = Some(secret_store::resolve_secret(val)?);
+                }
+                if let Some(ref val) = resolved.oauth_refresh_token {
+                    resolved.oauth_refresh_token = Some(secret_store::resolve_secret(val)?);
+                }
+                Ok(Some(resolved))
+            }
+        }
     }
 
     pub fn list_providers(&self) -> Vec<&String> {
@@ -132,6 +211,63 @@ impl ConfigManager {
 
     pub fn get_config_path(&self) -> Result<PathBuf> {
         Ok(self.config_path.clone())
+    }
+
+    /// Migrate all plaintext secrets in config to the OS keyring.
+    /// Returns the number of secrets migrated.
+    pub fn migrate_secrets(&mut self) -> Result<usize> {
+        let mut migrated = 0;
+
+        let provider_names: Vec<String> = self.config.providers.keys().cloned().collect();
+        for name in provider_names {
+            let provider = self.config.providers.get_mut(&name).unwrap();
+
+            if let Some(ref val) = provider.api_key {
+                if secret_store::parse_sentinel(val).is_none() && !val.is_empty() {
+                    let key_name = format!("provider.{}.api_key", name);
+                    if let Some(sentinel) = secret_store::migrate_secret(&key_name, val) {
+                        provider.api_key = Some(sentinel);
+                        migrated += 1;
+                    }
+                }
+            }
+
+            if let Some(ref val) = provider.oauth_token {
+                if secret_store::parse_sentinel(val).is_none() && !val.is_empty() {
+                    let key_name = format!("provider.{}.oauth_token", name);
+                    if let Some(sentinel) = secret_store::migrate_secret(&key_name, val) {
+                        provider.oauth_token = Some(sentinel);
+                        migrated += 1;
+                    }
+                }
+            }
+
+            if let Some(ref val) = provider.oauth_client_secret {
+                if secret_store::parse_sentinel(val).is_none() && !val.is_empty() {
+                    let key_name = format!("provider.{}.oauth_client_secret", name);
+                    if let Some(sentinel) = secret_store::migrate_secret(&key_name, val) {
+                        provider.oauth_client_secret = Some(sentinel);
+                        migrated += 1;
+                    }
+                }
+            }
+
+            if let Some(ref val) = provider.oauth_refresh_token {
+                if secret_store::parse_sentinel(val).is_none() && !val.is_empty() {
+                    let key_name = format!("provider.{}.oauth_refresh_token", name);
+                    if let Some(sentinel) = secret_store::migrate_secret(&key_name, val) {
+                        provider.oauth_refresh_token = Some(sentinel);
+                        migrated += 1;
+                    }
+                }
+            }
+        }
+
+        if migrated > 0 {
+            self.save()?;
+        }
+
+        Ok(migrated)
     }
 
     fn get_config_path_internal() -> Result<PathBuf> {

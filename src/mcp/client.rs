@@ -219,9 +219,17 @@ impl McpClient {
         while let Ok(Some(line)) = lines.next_line().await {
             if let Ok(response) = serde_json::from_str::<JsonRpcResponse>(&line) {
                 if let Some(id) = response.id {
-                    let mut pending = pending.lock().unwrap();
-                    if let Some(sender) = pending.remove(&id) {
-                        let _ = sender.send(response);
+                    match pending.lock() {
+                        Ok(mut pending) => {
+                            if let Some(sender) = pending.remove(&id) {
+                                let _ = sender.send(response);
+                            }
+                        }
+                        Err(poisoned) => {
+                            eprintln!("[MCP] Warning: mutex poisoned in response_reader, recovering");
+                            let mut pending = poisoned.into_inner();
+                            pending.clear();
+                        }
                     }
                 }
             }
