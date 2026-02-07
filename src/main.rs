@@ -148,6 +148,16 @@ enum OAuthAction {
         /// Provider name (google, claude, openai)
         provider: String,
     },
+    /// Get OAuth authorization URL (desktop use - doesn't block)
+    GetUrl {
+        /// Provider name (google, claude, openai)
+        provider: String,
+    },
+    /// Wait for OAuth callback (desktop use - starts server and blocks)
+    WaitCallback {
+        /// Provider name
+        provider: String,
+    },
     /// Check OAuth authorization status
     Status {
         /// Provider name
@@ -1206,6 +1216,70 @@ async fn run_command(command: Commands, json_mode: bool) -> Result<()> {
         }
         Commands::OAuth { action } => {
             match action {
+                OAuthAction::GetUrl { provider } => {
+                    // Just get the auth URL without starting callback server
+                    let config_manager = ConfigManager::new()?;
+                    let auth_url = match oauth::start_oauth_flow(&provider, config_manager.get()) {
+                        Ok(url) => url,
+                        Err(e) => {
+                            let msg = format!("Failed to generate OAuth URL: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    };
+
+                    if json_mode {
+                        println!("{}", json_output(true, serde_json::json!({
+                            "auth_url": auth_url,
+                            "provider": provider,
+                            "callback_port": 8765,
+                        }), None));
+                    } else {
+                        println!("OAuth URL: {}", auth_url);
+                        println!("After opening the URL, run: nexus oauth wait-callback {}", provider);
+                    }
+                }
+                OAuthAction::WaitCallback { provider } => {
+                    // Start callback server and wait
+                    let config_manager = ConfigManager::new()?;
+                    let token = match oauth::handle_oauth_callback(&provider, config_manager.get(), 300) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            let msg = format!("OAuth callback failed: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    };
+
+                    // Save token
+                    let mut config_manager = ConfigManager::new()?;
+                    if let Err(e) = oauth::save_oauth_token(&provider, &token, &mut config_manager) {
+                        let msg = format!("Failed to save OAuth token: {}", e);
+                        if json_mode {
+                            println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                        } else {
+                            eprintln!("{}", msg);
+                        }
+                        std::process::exit(1);
+                    }
+
+                    if json_mode {
+                        println!("{}", json_output(true, serde_json::json!({
+                            "provider": provider,
+                            "message": "OAuth token saved successfully"
+                        }), None));
+                    } else {
+                        println!("✅ OAuth authorization completed for '{}'", provider);
+                    }
+                }
                 OAuthAction::Authorize { provider } => {
                     let config_manager = ConfigManager::new()?;
                     // Start OAuth flow
