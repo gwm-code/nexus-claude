@@ -41,10 +41,9 @@ impl OAuthProvider {
                 "https://accounts.google.com/o/oauth2/v2/auth",
                 "https://oauth2.googleapis.com/token",
                 vec![
-                    "https://www.googleapis.com/auth/generative-language.retriever",
-                    "openid",
-                    "email",
-                    "profile"
+                    "https://www.googleapis.com/auth/cloud-platform",
+                    "https://www.googleapis.com/auth/userinfo.email",
+                    "https://www.googleapis.com/auth/userinfo.profile",
                 ],
             ),
             "claude" | "anthropic" => (
