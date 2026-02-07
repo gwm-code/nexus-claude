@@ -34,6 +34,7 @@ pub struct ProviderConfig {
     pub oauth_client_id: Option<String>,
     pub oauth_client_secret: Option<String>,
     pub oauth_refresh_token: Option<String>,
+    pub oauth_expires_at: Option<u64>, // Unix timestamp
     pub base_url: Option<String>,
     pub default_model: Option<String>,
     pub timeout_secs: Option<u64>,

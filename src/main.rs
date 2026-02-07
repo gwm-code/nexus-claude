@@ -7,6 +7,7 @@ mod executor;
 mod hierarchy;
 mod memory;
 mod mcp;
+mod oauth;
 mod providers;
 mod sandbox;
 mod secret_store;
@@ -83,6 +84,11 @@ enum Commands {
         #[command(subcommand)]
         action: HierarchyAction,
     },
+    /// OAuth authentication flow (PKCE)
+    OAuth {
+        #[command(subcommand)]
+        action: OAuthAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -132,6 +138,20 @@ enum DaemonAction {
     Status,
     /// Run proactive tasks manually (without daemon)
     RunTasks,
+}
+
+#[derive(Subcommand)]
+enum OAuthAction {
+    /// Start OAuth authorization flow (opens browser)
+    Authorize {
+        /// Provider name (google, claude, openai)
+        provider: String,
+    },
+    /// Check OAuth authorization status
+    Status {
+        /// Provider name
+        provider: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1138,6 +1158,110 @@ async fn run_command(command: Commands, json_mode: bool) -> Result<()> {
                 }
             }
         }
+        Commands::OAuth { action } => {
+            match action {
+                OAuthAction::Authorize { provider } => {
+                    // Start OAuth flow
+                    let auth_url = match oauth::start_oauth_flow(&provider) {
+                        Ok(url) => url,
+                        Err(e) => {
+                            let msg = format!("Failed to start OAuth flow: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    };
+
+                    if json_mode {
+                        println!("{}", json_output(true, serde_json::json!({
+                            "auth_url": auth_url,
+                            "provider": provider,
+                            "callback_port": 8765,
+                        }), None));
+                    } else {
+                        println!("Opening browser for OAuth authorization...");
+                        println!("If the browser doesn't open, visit: {}", auth_url);
+                    }
+
+                    // Open browser
+                    if let Err(e) = open::that(&auth_url) {
+                        eprintln!("Failed to open browser: {}", e);
+                        println!("Please manually open: {}", auth_url);
+                    }
+
+                    // Handle callback and get token
+                    let token = match oauth::handle_oauth_callback(&provider, 300) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            let msg = format!("OAuth authorization failed: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    };
+
+                    // Save token to config
+                    let mut config_manager = ConfigManager::new()?;
+                    if let Err(e) = oauth::save_oauth_token(&provider, &token, &mut config_manager) {
+                        let msg = format!("Failed to save OAuth token: {}", e);
+                        if json_mode {
+                            println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                        } else {
+                            eprintln!("{}", msg);
+                        }
+                        std::process::exit(1);
+                    }
+
+                    if json_mode {
+                        println!("{}", json_output(true, serde_json::json!({
+                            "status": "authorized",
+                            "provider": provider,
+                            "expires_in": token.expires_in,
+                        }), None));
+                    } else {
+                        println!("✅ OAuth authorization successful for {}!", provider);
+                        if let Some(exp) = token.expires_in {
+                            println!("Token expires in {} seconds", exp);
+                        }
+                    }
+                }
+                OAuthAction::Status { provider } => {
+                    let config_manager = ConfigManager::new()?;
+                    let status = match oauth::check_oauth_status(&provider, config_manager.get()) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let msg = format!("Failed to check OAuth status: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    };
+
+                    if json_mode {
+                        println!("{}", json_output(true, serde_json::to_value(&status)?, None));
+                    } else {
+                        if status.authorized {
+                            println!("✅ Provider {} is authorized", provider);
+                            if let Some(exp) = status.expires_at {
+                                println!("Expires at: {}", exp);
+                            }
+                        } else {
+                            println!("❌ Provider {} is not authorized", provider);
+                            println!("Run: nexus oauth authorize {}", provider);
+                        }
+                    }
+                }
+            }
+        }
         Commands::Chat { message } => {
             // Non-interactive chat requires a configured provider
             let config_manager = ConfigManager::new()?;
@@ -1788,6 +1912,7 @@ async fn configure_api_key_provider(name: &str) -> Result<ProviderConfig> {
         oauth_client_id: None,
         oauth_client_secret: None,
         oauth_refresh_token: None,
+        oauth_expires_at: None,
         base_url: None,
         default_model: None,
         timeout_secs: Some(60),
