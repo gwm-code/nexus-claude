@@ -1,6 +1,6 @@
 use crate::config::ProviderConfig;
 use crate::error::{NexusError, Result};
-use crate::providers::{CompletionRequest, CompletionResponse, Provider, ProviderInfo, StreamChunk, Usage};
+use crate::providers::{CompletionRequest, CompletionResponse, ModelInfo, ModelPricing, Provider, ProviderInfo, StreamChunk, Usage};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json;
@@ -206,6 +206,79 @@ impl Provider for OpencodeProvider {
 
         let _ = tx.send(StreamChunk::Done).await;
         Ok(())
+    }
+
+    async fn list_available_models(&self) -> Result<Vec<ModelInfo>> {
+        // OpenCode/Zen doesn't have a public models API
+        // Providing comprehensive hardcoded list of available models
+        Ok(vec![
+            ModelInfo {
+                id: "kimi-k2.5".to_string(),
+                name: "Kimi K2.5".to_string(),
+                description: Some("Latest Kimi model with enhanced capabilities".to_string()),
+                context_length: Some(128000),
+                pricing: None,
+                supports_vision: false,
+                supports_streaming: true,
+                supports_function_calling: true,
+            },
+            ModelInfo {
+                id: "kimi-k2.5-free".to_string(),
+                name: "Kimi K2.5 Free".to_string(),
+                description: Some("Free tier Kimi K2.5".to_string()),
+                context_length: Some(128000),
+                pricing: Some(ModelPricing {
+                    prompt: Some(0.0),
+                    completion: Some(0.0),
+                }),
+                supports_vision: false,
+                supports_streaming: true,
+                supports_function_calling: true,
+            },
+            ModelInfo {
+                id: "deepseek-v3".to_string(),
+                name: "DeepSeek V3".to_string(),
+                description: Some("DeepSeek's latest coding-focused model".to_string()),
+                context_length: Some(64000),
+                pricing: None,
+                supports_vision: false,
+                supports_streaming: true,
+                supports_function_calling: true,
+            },
+            ModelInfo {
+                id: "qwen3-coder".to_string(),
+                name: "Qwen 3 Coder".to_string(),
+                description: Some("Qwen's specialized coding model".to_string()),
+                context_length: Some(32000),
+                pricing: None,
+                supports_vision: false,
+                supports_streaming: true,
+                supports_function_calling: true,
+            },
+            ModelInfo {
+                id: "glm-4.7".to_string(),
+                name: "GLM 4.7".to_string(),
+                description: Some("ChatGLM latest generation".to_string()),
+                context_length: Some(128000),
+                pricing: None,
+                supports_vision: false,
+                supports_streaming: true,
+                supports_function_calling: true,
+            },
+            ModelInfo {
+                id: "glm-4.7-free".to_string(),
+                name: "GLM 4.7 Free".to_string(),
+                description: Some("Free tier GLM 4.7".to_string()),
+                context_length: Some(128000),
+                pricing: Some(ModelPricing {
+                    prompt: Some(0.0),
+                    completion: Some(0.0),
+                }),
+                supports_vision: false,
+                supports_streaming: true,
+                supports_function_calling: true,
+            },
+        ])
     }
 
     async fn authenticate(&mut self) -> Result<()> {

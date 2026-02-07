@@ -94,6 +94,33 @@ pub struct ProviderInfo {
     pub available_models: Vec<String>,
 }
 
+/// Detailed information about a specific model
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelInfo {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<ModelPricing>,
+    #[serde(default)]
+    pub supports_vision: bool,
+    #[serde(default)]
+    pub supports_streaming: bool,
+    #[serde(default)]
+    pub supports_function_calling: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelPricing {
+    /// Price per million prompt tokens (USD)
+    pub prompt: Option<f64>,
+    /// Price per million completion tokens (USD)
+    pub completion: Option<f64>,
+}
+
 #[async_trait]
 pub trait Provider: Send + Sync {
     fn info(&self) -> ProviderInfo;
@@ -113,6 +140,13 @@ pub trait Provider: Send + Sync {
         }
         let _ = tx.send(StreamChunk::Done).await;
         Ok(())
+    }
+
+    /// Fetch available models from the provider's API
+    /// Returns detailed model information including pricing, context limits, etc.
+    /// Default implementation returns an empty list (provider should override)
+    async fn list_available_models(&self) -> Result<Vec<ModelInfo>> {
+        Ok(Vec::new())
     }
 
     async fn authenticate(&mut self) -> Result<()>;

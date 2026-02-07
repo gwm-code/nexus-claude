@@ -1,6 +1,6 @@
 use crate::config::ProviderConfig;
 use crate::error::{NexusError, Result};
-use crate::providers::{CompletionRequest, CompletionResponse, Message, Provider, ProviderInfo, Role, Usage};
+use crate::providers::{CompletionRequest, CompletionResponse, Message, ModelInfo, ModelPricing, Provider, ProviderInfo, Role, Usage};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json;
@@ -148,6 +148,69 @@ impl Provider for OpenRouterProvider {
             usage,
             tool_calls: None,
         })
+    }
+
+    async fn list_available_models(&self) -> Result<Vec<ModelInfo>> {
+        let response = self.client
+            .get(format!("{}/models", self.base_url))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(NexusError::ApiRequest(format!(
+                "OpenRouter API error: {}",
+                error_text
+            )));
+        }
+
+        let data: serde_json::Value = response.json().await?;
+        let models: Vec<ModelInfo> = data["data"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter_map(|m| {
+                let id = m["id"].as_str()?.to_string();
+                let name = m["name"].as_str().unwrap_or(&id).to_string();
+                let description = m["description"].as_str().map(|s| s.to_string());
+                let context_length = m["context_length"].as_u64().map(|n| n as u32);
+
+                // Parse pricing (OpenRouter uses price per token, convert to per million)
+                let pricing = if let Some(pricing_obj) = m["pricing"].as_object() {
+                    let prompt = pricing_obj.get("prompt")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .map(|p| p * 1_000_000.0); // Convert per-token to per-million
+                    let completion = pricing_obj.get("completion")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .map(|c| c * 1_000_000.0);
+                    Some(ModelPricing { prompt, completion })
+                } else {
+                    None
+                };
+
+                Some(ModelInfo {
+                    id,
+                    name,
+                    description,
+                    context_length,
+                    pricing,
+                    supports_vision: m["architecture"].as_object()
+                        .and_then(|a| a.get("modality"))
+                        .and_then(|mod_| mod_.as_str())
+                        .map(|s| s.contains("image"))
+                        .unwrap_or(false),
+                    supports_streaming: true, // OpenRouter supports streaming for all models
+                    supports_function_calling: m["top_provider"].as_object()
+                        .and_then(|p| p.get("supports_function_calling"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                })
+            })
+            .collect();
+
+        Ok(models)
     }
 
     async fn authenticate(&mut self) -> Result<()> {

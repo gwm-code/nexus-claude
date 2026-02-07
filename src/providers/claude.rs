@@ -1,6 +1,6 @@
 use crate::config::ProviderConfig;
 use crate::error::{NexusError, Result};
-use crate::providers::{CompletionRequest, CompletionResponse, Message, Provider, ProviderInfo, Role, Usage};
+use crate::providers::{CompletionRequest, CompletionResponse, Message, ModelInfo, ModelPricing, Provider, ProviderInfo, Role, Usage};
 use async_trait::async_trait;
 use oauth2::{
     AuthUrl, ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope,
@@ -351,6 +351,92 @@ impl Provider for ClaudeProvider {
             usage,
             tool_calls: None,
         })
+    }
+
+    async fn list_available_models(&self) -> Result<Vec<ModelInfo>> {
+        // Anthropic doesn't have a public models API endpoint yet
+        // Providing hardcoded list with current pricing and specs as of Jan 2025
+        Ok(vec![
+            ModelInfo {
+                id: "claude-sonnet-4-5-20250929".to_string(),
+                name: "Claude 4.5 Sonnet".to_string(),
+                description: Some("Latest Claude model with best-in-class intelligence and speed".to_string()),
+                context_length: Some(200000),
+                pricing: Some(ModelPricing {
+                    prompt: Some(3.0),      // $3 per million input tokens
+                    completion: Some(15.0), // $15 per million output tokens
+                }),
+                supports_vision: true,
+                supports_streaming: true,
+                supports_function_calling: true,
+            },
+            ModelInfo {
+                id: "claude-opus-4-6".to_string(),
+                name: "Claude 4.6 Opus".to_string(),
+                description: Some("Most powerful Claude model for complex tasks".to_string()),
+                context_length: Some(200000),
+                pricing: Some(ModelPricing {
+                    prompt: Some(15.0),     // $15 per million input tokens
+                    completion: Some(75.0), // $75 per million output tokens
+                }),
+                supports_vision: true,
+                supports_streaming: true,
+                supports_function_calling: true,
+            },
+            ModelInfo {
+                id: "claude-haiku-4-5-20251001".to_string(),
+                name: "Claude 4.5 Haiku".to_string(),
+                description: Some("Fastest and most compact Claude model".to_string()),
+                context_length: Some(200000),
+                pricing: Some(ModelPricing {
+                    prompt: Some(0.8),     // $0.80 per million input tokens
+                    completion: Some(4.0), // $4 per million output tokens
+                }),
+                supports_vision: true,
+                supports_streaming: true,
+                supports_function_calling: true,
+            },
+            // Legacy models
+            ModelInfo {
+                id: "claude-3-5-sonnet-20241022".to_string(),
+                name: "Claude 3.5 Sonnet".to_string(),
+                description: Some("Previous generation high-performance model".to_string()),
+                context_length: Some(200000),
+                pricing: Some(ModelPricing {
+                    prompt: Some(3.0),
+                    completion: Some(15.0),
+                }),
+                supports_vision: true,
+                supports_streaming: true,
+                supports_function_calling: true,
+            },
+            ModelInfo {
+                id: "claude-3-opus-20240229".to_string(),
+                name: "Claude 3 Opus".to_string(),
+                description: Some("Legacy most powerful model".to_string()),
+                context_length: Some(200000),
+                pricing: Some(ModelPricing {
+                    prompt: Some(15.0),
+                    completion: Some(75.0),
+                }),
+                supports_vision: true,
+                supports_streaming: true,
+                supports_function_calling: true,
+            },
+            ModelInfo {
+                id: "claude-3-haiku-20240307".to_string(),
+                name: "Claude 3 Haiku".to_string(),
+                description: Some("Legacy fastest model".to_string()),
+                context_length: Some(200000),
+                pricing: Some(ModelPricing {
+                    prompt: Some(0.25),
+                    completion: Some(1.25),
+                }),
+                supports_vision: true,
+                supports_streaming: true,
+                supports_function_calling: true,
+            },
+        ])
     }
 
     async fn authenticate(&mut self) -> Result<()> {

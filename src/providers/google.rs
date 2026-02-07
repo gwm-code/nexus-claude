@@ -1,6 +1,6 @@
 use crate::config::ProviderConfig;
 use crate::error::{NexusError, Result};
-use crate::providers::{CompletionRequest, CompletionResponse, Message, Provider, ProviderInfo, Usage};
+use crate::providers::{CompletionRequest, CompletionResponse, Message, ModelInfo, ModelPricing, Provider, ProviderInfo, Usage};
 use async_trait::async_trait;
 use oauth2::{
     AuthUrl, ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope,
@@ -338,6 +338,95 @@ impl Provider for GoogleProvider {
             usage,
             tool_calls: None,
         })
+    }
+
+    async fn list_available_models(&self) -> Result<Vec<ModelInfo>> {
+        // Google's models API: https://generativelanguage.googleapis.com/v1beta/models
+        let mut url = format!("{}/models", self.base_url);
+
+        // Add authentication (API key or OAuth token)
+        let response = if let Some(api_key) = &self.api_key {
+            url.push_str(&format!("?key={}", api_key));
+            self.client.get(&url).send().await?
+        } else if let Some(oauth_token) = &self.oauth_token {
+            self.client
+                .get(&url)
+                .header("Authorization", format!("Bearer {}", oauth_token))
+                .send()
+                .await?
+        } else {
+            return Err(NexusError::Authentication(
+                "Google API key or OAuth token required to list models".to_string()
+            ));
+        };
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(NexusError::ApiRequest(format!(
+                "Google API error: {}",
+                error_text
+            )));
+        }
+
+        let data: serde_json::Value = response.json().await?;
+        let models: Vec<ModelInfo> = data["models"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter_map(|m| {
+                let full_name = m["name"].as_str()?;
+                // Extract model ID from "models/gemini-3.0-pro" format
+                let id = full_name.strip_prefix("models/")?.to_string();
+                let display_name = m["displayName"].as_str().unwrap_or(&id).to_string();
+                let description = m["description"].as_str().map(|s| s.to_string());
+
+                // Parse context length (inputTokenLimit)
+                let context_length = m["inputTokenLimit"].as_u64().map(|n| n as u32);
+
+                // Check if model supports vision (multimodal)
+                let supports_vision = m["supportedGenerationMethods"]
+                    .as_array()
+                    .map(|methods| {
+                        methods.iter().any(|method| {
+                            method.as_str().map(|s| s.contains("vision") || s.contains("multimodal")).unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(id.contains("vision") || id.contains("pro")); // Fallback heuristic
+
+                // Gemini models support streaming
+                let supports_streaming = m["supportedGenerationMethods"]
+                    .as_array()
+                    .map(|methods| {
+                        methods.iter().any(|method| {
+                            method.as_str().map(|s| s.contains("streamGenerateContent")).unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(true); // Most Gemini models support streaming
+
+                // Gemini models support function calling
+                let supports_function_calling = m["supportedGenerationMethods"]
+                    .as_array()
+                    .map(|methods| {
+                        methods.iter().any(|method| {
+                            method.as_str().map(|s| s.contains("generateContent")).unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(true);
+
+                Some(ModelInfo {
+                    id,
+                    name: display_name,
+                    description,
+                    context_length,
+                    pricing: None, // Google doesn't expose pricing in models API
+                    supports_vision,
+                    supports_streaming,
+                    supports_function_calling,
+                })
+            })
+            .collect();
+
+        Ok(models)
     }
 
     async fn authenticate(&mut self) -> Result<()> {

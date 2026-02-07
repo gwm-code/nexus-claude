@@ -683,66 +683,20 @@ async fn run_command(command: Commands, json_mode: bool) -> Result<()> {
                     }
                 }
                 ConfigAction::ListModels { provider } => {
-                    let models: Vec<&str> = match provider.to_lowercase().as_str() {
-                        "claude" => vec![
-                            "claude-sonnet-4-5-20250929",
-                            "claude-opus-4-6",
-                            "claude-haiku-4-5-20251001",
-                        ],
-                        "opencode" => vec![
-                            "kimi-k2.5",
-                            "deepseek-v3",
-                        ],
-                        "openrouter" => vec![
-                            // Auto routing models
-                            "auto:free",
-                            "auto",
-                            // Free models
-                            "meta-llama/llama-3.3-70b-instruct:free",
-                            "google/gemini-flash-1.5:free",
-                            "google/gemini-2.0-flash-exp:free",
-                            "qwen/qwen-2.5-72b-instruct:free",
-                            "mistralai/mistral-7b-instruct:free",
-                            "microsoft/phi-3-medium-128k-instruct:free",
-                            "huggingfaceh4/zephyr-7b-beta:free",
-                            // Premium models
-                            "anthropic/claude-sonnet-4-5",
-                            "anthropic/claude-opus-4-6",
-                            "anthropic/claude-haiku-4-5",
-                            "openai/gpt-4o",
-                            "openai/gpt-4o-mini",
-                            "openai/o1-preview",
-                            "openai/o1-mini",
-                            "google/gemini-3.0-pro",
-                            "google/gemini-3.0-flash",
-                            "google/gemini-2.5-pro",
-                            "google/gemini-2.5-flash",
-                            "x-ai/grok-2-vision",
-                            "deepseek/deepseek-chat",
-                            "meta-llama/llama-3.3-70b-instruct",
-                            "mistralai/mistral-large",
-                        ],
-                        "google" => vec![
-                            // Gemini 3.0 family (latest)
-                            "gemini-3.0-pro",
-                            "gemini-3.0-flash",
-                            "gemini-3.0-flash-8b",
-                            // Gemini 2.5 family
-                            "gemini-2.5-pro",
-                            "gemini-2.5-flash",
-                            // Gemini 2.0 family
-                            "gemini-2.0-pro",
-                            "gemini-2.0-flash",
-                            "gemini-2.0-flash-lite",
-                            // Gemini 1.5 family (legacy)
-                            "gemini-1.5-pro",
-                            "gemini-1.5-flash",
-                            "gemini-1.5-flash-8b",
-                            // Experimental
-                            "gemini-2.0-flash-exp",
-                        ],
-                        _ => {
-                            let msg = format!("Unknown provider: '{}'. Valid providers: claude, opencode, openrouter, google", provider);
+                    // Load provider config with resolved secrets
+                    let provider_config = match config_manager.get_provider_resolved(&provider) {
+                        Ok(Some(cfg)) => cfg,
+                        Ok(None) => {
+                            let msg = format!("Provider '{}' is not configured. Run: nexus config set-provider {}", provider, provider);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                        Err(e) => {
+                            let msg = format!("Failed to resolve provider secrets: {}", e);
                             if json_mode {
                                 println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
                             } else {
@@ -751,15 +705,67 @@ async fn run_command(command: Commands, json_mode: bool) -> Result<()> {
                             std::process::exit(1);
                         }
                     };
+
+                    // Create provider instance
+                    let prov = match create_provider(&provider_config.provider_type, &provider_config) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            let msg = format!("Failed to create provider: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    };
+
+                    // Try to fetch models dynamically from provider API
+                    let models_result = match prov.list_available_models().await {
+                        Ok(models) => models,
+                        Err(e) => {
+                            if !json_mode {
+                                eprintln!("Warning: Could not fetch models from provider API: {}", e);
+                                eprintln!("Using static model list as fallback...");
+                            }
+                            // Fallback to static info
+                            prov.info().available_models.into_iter()
+                                .map(|id| providers::ModelInfo {
+                                    id: id.clone(),
+                                    name: id,
+                                    description: None,
+                                    context_length: None,
+                                    pricing: None,
+                                    supports_vision: false,
+                                    supports_streaming: false,
+                                    supports_function_calling: false,
+                                })
+                                .collect()
+                        }
+                    };
+
                     if json_mode {
                         println!("{}", json_output(true, serde_json::json!({
                             "provider": provider,
-                            "models": models,
+                            "models": models_result,
                         }), None));
                     } else {
                         println!("Available models for '{}':", provider);
-                        for model in &models {
-                            println!("  {}", model);
+                        println!();
+                        for model in &models_result {
+                            println!("  {} - {}", model.id, model.name);
+                            if let Some(desc) = &model.description {
+                                println!("    {}", desc);
+                            }
+                            if let Some(ctx_len) = model.context_length {
+                                println!("    Context: {} tokens", ctx_len);
+                            }
+                            if let Some(pricing) = &model.pricing {
+                                if let (Some(p), Some(c)) = (pricing.prompt, pricing.completion) {
+                                    println!("    Pricing: ${:.2}/M input, ${:.2}/M output", p, c);
+                                }
+                            }
+                            println!();
                         }
                     }
                 }
