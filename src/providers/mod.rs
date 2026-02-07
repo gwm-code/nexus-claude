@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 pub mod claude;
 pub mod google;
+pub mod model_capabilities;
 pub mod opencode;
 pub mod openrouter;
 pub mod retry;

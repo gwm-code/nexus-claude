@@ -8,6 +8,13 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OAuthStatus {
+    pub authorized: bool,
+    pub provider: String,
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NexusConfig {
     #[serde(default)]
     pub default_provider: Option<String>,
@@ -268,6 +275,42 @@ impl ConfigManager {
         }
 
         Ok(migrated)
+    }
+
+    /// Store OAuth credentials (client ID and secret) in keyring
+    pub fn set_oauth_credentials(&mut self, provider_name: &str, client_id: &str, client_secret: &str) -> Result<()> {
+        let provider = self.config.providers.get_mut(provider_name)
+            .ok_or_else(|| NexusError::Configuration(format!("Provider '{}' not found", provider_name)))?;
+
+        // Store client_id and client_secret in keyring
+        let client_id_key = format!("provider.{}.oauth_client_id", provider_name);
+        let client_secret_key = format!("provider.{}.oauth_client_secret", provider_name);
+
+        secret_store::store_secret(&client_id_key, client_id)?;
+        secret_store::store_secret(&client_secret_key, client_secret)?;
+
+        provider.oauth_client_id = Some(secret_store::make_sentinel(&client_id_key));
+        provider.oauth_client_secret = Some(secret_store::make_sentinel(&client_secret_key));
+
+        self.save()?;
+        Ok(())
+    }
+
+    /// Get OAuth status for a provider
+    pub fn get_oauth_status(&self, provider_name: &str) -> Result<OAuthStatus> {
+        let provider = self.get_provider(provider_name)
+            .ok_or_else(|| NexusError::Configuration(format!("Provider '{}' not found", provider_name)))?;
+
+        let authorized = provider.oauth_token.is_some();
+
+        // TODO: Parse expires_at from stored token metadata
+        let expires_at = None;
+
+        Ok(OAuthStatus {
+            authorized,
+            provider: provider_name.to_string(),
+            expires_at,
+        })
     }
 
     fn get_config_path_internal() -> Result<PathBuf> {

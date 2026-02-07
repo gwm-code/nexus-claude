@@ -1,8 +1,10 @@
 mod agent;
 mod config;
 mod context;
+mod daemon;
 mod error;
 mod executor;
+mod hierarchy;
 mod memory;
 mod mcp;
 mod providers;
@@ -71,6 +73,65 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// Manage background daemon for proactive tasks
+    Daemon {
+        #[command(subcommand)]
+        action: DaemonAction,
+    },
+    /// Manage model hierarchy and escalation
+    Hierarchy {
+        #[command(subcommand)]
+        action: HierarchyAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum HierarchyAction {
+    /// Show current hierarchy configuration
+    Show,
+    /// Set hierarchy from preset (balanced, budget, premium, speed, claude-only)
+    SetPreset {
+        preset: String,
+    },
+    /// Set model for a specific category and tier
+    SetModel {
+        /// Category: heartbeat, daily, planning, coding, review
+        category: String,
+        /// Tier index (0 = first tier)
+        tier: usize,
+        /// Model ID
+        model_id: String,
+    },
+    /// Show escalation policy
+    ShowPolicy,
+    /// Update escalation policy
+    UpdatePolicy {
+        /// Enable/disable escalation
+        #[arg(long)]
+        enabled: Option<bool>,
+        /// Max escalation steps
+        #[arg(long)]
+        max_escalations: Option<usize>,
+        /// Daily budget limit in USD
+        #[arg(long)]
+        budget_limit: Option<f64>,
+    },
+}
+
+#[derive(Subcommand)]
+enum DaemonAction {
+    /// Start the background daemon
+    Start {
+        /// Heartbeat interval in hours (0-24, 0 = disabled)
+        #[arg(short, long, default_value = "24")]
+        interval: u8,
+    },
+    /// Stop the background daemon
+    Stop,
+    /// Show daemon status
+    Status,
+    /// Run proactive tasks manually (without daemon)
+    RunTasks,
 }
 
 #[derive(Subcommand)]
@@ -106,6 +167,25 @@ enum ConfigAction {
     },
     /// Migrate plaintext secrets to keyring
     MigrateSecrets,
+    /// Set OAuth credentials (client ID and secret)
+    SetOAuth {
+        /// Provider name (google, claude, openai)
+        provider: String,
+        /// OAuth Client ID
+        client_id: String,
+        /// OAuth Client Secret
+        client_secret: String,
+    },
+    /// Start OAuth authorization flow
+    OAuthAuthorize {
+        /// Provider name (google, claude, openai)
+        provider: String,
+    },
+    /// Check OAuth authorization status
+    OAuthStatus {
+        /// Provider name (google, claude, openai)
+        provider: String,
+    },
 }
 
 /// JSON envelope for non-interactive output
@@ -744,6 +824,316 @@ async fn run_command(command: Commands, json_mode: bool) -> Result<()> {
                             }
                             std::process::exit(1);
                         }
+                    }
+                }
+                ConfigAction::SetOAuth { provider, client_id, client_secret } => {
+                    match config_manager.set_oauth_credentials(&provider, &client_id, &client_secret) {
+                        Ok(()) => {
+                            if json_mode {
+                                println!("{}", json_output(true, serde_json::json!({
+                                    "provider": provider,
+                                    "status": "oauth_credentials_stored",
+                                }), None));
+                            } else {
+                                println!("OAuth credentials for '{}' stored securely.", provider);
+                            }
+                        }
+                        Err(e) => {
+                            let msg = format!("Failed to store OAuth credentials: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                ConfigAction::OAuthAuthorize { provider } => {
+                    match run_oauth_flow(&provider, &config_manager).await {
+                        Ok(auth_url) => {
+                            if json_mode {
+                                println!("{}", json_output(true, serde_json::json!({
+                                    "provider": provider,
+                                    "auth_url": auth_url,
+                                    "status": "authorization_complete",
+                                }), None));
+                            } else {
+                                println!("OAuth authorization complete for '{}'!", provider);
+                            }
+                        }
+                        Err(e) => {
+                            let msg = format!("OAuth authorization failed: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                ConfigAction::OAuthStatus { provider } => {
+                    match config_manager.get_oauth_status(&provider) {
+                        Ok(status) => {
+                            if json_mode {
+                                println!("{}", json_output(true, serde_json::json!(status), None));
+                            } else {
+                                if status.authorized {
+                                    println!("OAuth Status for '{}':", provider);
+                                    println!("  Authorized: Yes");
+                                    if let Some(expires) = status.expires_at {
+                                        println!("  Expires: {}", expires);
+                                    }
+                                } else {
+                                    println!("OAuth Status for '{}':", provider);
+                                    println!("  Authorized: No");
+                                    println!("  Run 'nexus config oauth-authorize {}' to authorize", provider);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let msg = format!("Failed to check OAuth status: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
+        }
+        Commands::Daemon { action } => {
+            let daemon_manager = daemon::DaemonManager::new()?;
+            match action {
+                DaemonAction::Start { interval } => {
+                    match daemon_manager.start(interval) {
+                        Ok(()) => {
+                            if json_mode {
+                                println!("{}", json_output(true, serde_json::json!({
+                                    "status": "started",
+                                    "interval_hours": interval,
+                                }), None));
+                            } else {
+                                println!("Daemon started with {}-hour heartbeat interval", interval);
+                                println!("Proactive tasks will run every {} hours in the background", interval);
+                            }
+                        }
+                        Err(e) => {
+                            let msg = format!("Failed to start daemon: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                DaemonAction::Stop => {
+                    match daemon_manager.stop() {
+                        Ok(()) => {
+                            if json_mode {
+                                println!("{}", json_output(true, serde_json::json!({
+                                    "status": "stopped",
+                                }), None));
+                            } else {
+                                println!("Daemon stopped");
+                            }
+                        }
+                        Err(e) => {
+                            let msg = format!("Failed to stop daemon: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                DaemonAction::Status => {
+                    match daemon_manager.status() {
+                        Ok(status) => {
+                            if json_mode {
+                                println!("{}", json_output(true, serde_json::to_value(&status)?, None));
+                            } else {
+                                if status.running {
+                                    println!("Daemon Status: Running");
+                                    if let Some(pid) = status.pid {
+                                        println!("  PID: {}", pid);
+                                    }
+                                    if let Some(interval) = status.interval_hours {
+                                        println!("  Heartbeat Interval: {} hours", interval);
+                                    }
+                                    if let Some(last_run) = status.last_run {
+                                        println!("  Last Run: {}", last_run);
+                                    }
+                                    if let Some(next_run) = status.next_run {
+                                        println!("  Next Run: {}", next_run);
+                                    }
+                                } else {
+                                    println!("Daemon Status: Not Running");
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let msg = format!("Failed to get daemon status: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                DaemonAction::RunTasks => {
+                    // Run tasks manually (blocking)
+                    if json_mode {
+                        println!("{}", json_output(true, serde_json::json!({
+                            "status": "running_tasks",
+                        }), None));
+                    } else {
+                        println!("Running proactive tasks...");
+                    }
+
+                    match daemon::run_proactive_tasks().await {
+                        Ok(()) => {
+                            if json_mode {
+                                println!("{}", json_output(true, serde_json::json!({
+                                    "status": "completed",
+                                }), None));
+                            } else {
+                                println!("Tasks completed successfully");
+                            }
+                        }
+                        Err(e) => {
+                            let msg = format!("Tasks failed: {}", e);
+                            if json_mode {
+                                println!("{}", json_output(false, serde_json::Value::Null, Some(&msg)));
+                            } else {
+                                eprintln!("{}", msg);
+                            }
+                            std::process::exit(1);
+                        }
+                    }
+
+                    // Update last run timestamp if daemon is running
+                    if let Ok(status) = daemon_manager.status() {
+                        if status.running {
+                            let _ = daemon_manager.update_last_run();
+                        }
+                    }
+                }
+            }
+        }
+        Commands::Hierarchy { action } => {
+            use hierarchy::{ModelHierarchy, EscalationPolicy, TaskCategory};
+
+            let config_dir = std::env::var("HOME")
+                .map(|h| std::path::PathBuf::from(h).join(".config/nexus"))
+                .unwrap_or_else(|_| std::path::PathBuf::from("~/.config/nexus"));
+
+            match action {
+                HierarchyAction::Show => {
+                    let hierarchy = ModelHierarchy::load(&config_dir)?;
+                    if json_mode {
+                        println!("{}", json_output(true, serde_json::to_value(&hierarchy)?, None));
+                    } else {
+                        println!("Model Hierarchy:");
+                        println!("  Heartbeat: {:?}", hierarchy.heartbeat.iter().map(|t| &t.model_id).collect::<Vec<_>>());
+                        println!("  Daily: {:?}", hierarchy.daily.iter().map(|t| &t.model_id).collect::<Vec<_>>());
+                        println!("  Planning: {:?}", hierarchy.planning.iter().map(|t| &t.model_id).collect::<Vec<_>>());
+                        println!("  Coding: {:?}", hierarchy.coding.iter().map(|t| &t.model_id).collect::<Vec<_>>());
+                        println!("  Review: {:?}", hierarchy.review.iter().map(|t| &t.model_id).collect::<Vec<_>>());
+                    }
+                }
+                HierarchyAction::SetPreset { preset } => {
+                    let hierarchy = ModelHierarchy::from_preset(&preset)
+                        .ok_or_else(|| anyhow::anyhow!("Unknown preset: '{}'. Valid: balanced, budget, premium, speed, claude-only", preset))?;
+
+                    hierarchy.save(&config_dir)?;
+
+                    if json_mode {
+                        println!("{}", json_output(true, serde_json::json!({
+                            "preset": preset,
+                            "hierarchy": hierarchy,
+                        }), None));
+                    } else {
+                        println!("Hierarchy set to '{}' preset", preset);
+                    }
+                }
+                HierarchyAction::SetModel { category, tier, model_id } => {
+                    let mut hierarchy = ModelHierarchy::load(&config_dir)?;
+                    let task_category = TaskCategory::from_str(&category)
+                        .ok_or_else(|| anyhow::anyhow!("Unknown category: '{}'. Valid: heartbeat, daily, planning, coding, review", category))?;
+
+                    let tiers = match task_category {
+                        TaskCategory::Heartbeat => &mut hierarchy.heartbeat,
+                        TaskCategory::Daily => &mut hierarchy.daily,
+                        TaskCategory::Planning => &mut hierarchy.planning,
+                        TaskCategory::Coding => &mut hierarchy.coding,
+                        TaskCategory::Review => &mut hierarchy.review,
+                    };
+
+                    // Ensure tier exists
+                    while tiers.len() <= tier {
+                        tiers.push(hierarchy::ModelTier {
+                            model_id: "".to_string(),
+                            max_tokens: None,
+                            max_cost_per_request: None,
+                        });
+                    }
+
+                    tiers[tier].model_id = model_id.clone();
+                    hierarchy.save(&config_dir)?;
+
+                    if json_mode {
+                        println!("{}", json_output(true, serde_json::json!({
+                            "category": category,
+                            "tier": tier,
+                            "model_id": model_id,
+                        }), None));
+                    } else {
+                        println!("Set {} tier {} to: {}", category, tier, model_id);
+                    }
+                }
+                HierarchyAction::ShowPolicy => {
+                    let policy = EscalationPolicy::load(&config_dir)?;
+                    if json_mode {
+                        println!("{}", json_output(true, serde_json::to_value(&policy)?, None));
+                    } else {
+                        println!("Escalation Policy:");
+                        println!("  Enabled: {}", policy.enabled);
+                        println!("  Max escalations: {}", policy.max_escalations);
+                        println!("  Daily budget limit: ${:.2}", policy.daily_budget_limit);
+                        println!("  Escalate on error: {}", policy.escalate_on_error);
+                        println!("  Escalate on refusal: {}", policy.escalate_on_refusal);
+                        println!("  Escalate on syntax error: {}", policy.escalate_on_syntax_error);
+                    }
+                }
+                HierarchyAction::UpdatePolicy { enabled, max_escalations, budget_limit } => {
+                    let mut policy = EscalationPolicy::load(&config_dir)?;
+
+                    if let Some(e) = enabled {
+                        policy.enabled = e;
+                    }
+                    if let Some(m) = max_escalations {
+                        policy.max_escalations = m;
+                    }
+                    if let Some(b) = budget_limit {
+                        policy.daily_budget_limit = b;
+                    }
+
+                    policy.save(&config_dir)?;
+
+                    if json_mode {
+                        println!("{}", json_output(true, serde_json::to_value(&policy)?, None));
+                    } else {
+                        println!("Escalation policy updated");
                     }
                 }
             }
@@ -1640,4 +2030,39 @@ fn show_current_model(config_manager: &ConfigManager) {
         }
     }
     println!();
+}
+
+// ============================================================================
+// OAuth Flow Implementation
+// ============================================================================
+
+async fn run_oauth_flow(provider: &str, config_manager: &ConfigManager) -> Result<String> {
+    // Get OAuth credentials from config
+    let provider_config = config_manager.get_provider(provider)
+        .ok_or_else(|| anyhow::anyhow!("Provider '{}' not configured", provider))?;
+
+    let client_id = provider_config.oauth_client_id.clone()
+        .ok_or_else(|| anyhow::anyhow!("OAuth client_id not set. Run 'nexus config set-oauth {} <client_id> <client_secret>' first", provider))?;
+
+    let client_secret = provider_config.oauth_client_secret.clone()
+        .ok_or_else(|| anyhow::anyhow!("OAuth client_secret not set. Run 'nexus config set-oauth {} <client_id> <client_secret>' first", provider))?;
+
+    // Create provider instance and generate OAuth URL
+    match provider {
+        "google" => {
+            let google_provider = providers::google::GoogleProvider::new(provider_config);
+            let auth_url = google_provider.generate_auth_url()?;
+            Ok(auth_url)
+        }
+        "claude" => {
+            let claude_provider = providers::claude::ClaudeProvider::new(provider_config);
+            let auth_url = claude_provider.generate_auth_url()?;
+            Ok(auth_url)
+        }
+        "openai" => {
+            // TODO: Implement OpenAI OAuth when openai.rs provider exists
+            Err(anyhow::anyhow!("OpenAI OAuth not yet implemented"))
+        }
+        _ => Err(anyhow::anyhow!("Provider '{}' does not support OAuth", provider)),
+    }
 }

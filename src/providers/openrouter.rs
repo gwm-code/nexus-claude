@@ -37,14 +37,19 @@ impl OpenRouterProvider {
             name: "openrouter".to_string(),
             display_name: "OpenRouter".to_string(),
             supports_oauth: false,
-            default_model: "anthropic/claude-3.5-sonnet".to_string(),
+            default_model: "openrouter/auto".to_string(),
             available_models: vec![
+                "openrouter/auto".to_string(),           // Auto-select best available model
+                "openrouter/auto:free".to_string(),      // Auto-select best free model
                 "anthropic/claude-3.5-sonnet".to_string(),
                 "anthropic/claude-3-opus".to_string(),
                 "google/gemini-pro-1.5".to_string(),
+                "google/gemini-flash-1.5".to_string(),
                 "meta-llama/llama-3.1-405b-instruct".to_string(),
                 "openai/gpt-4o".to_string(),
                 "openai/gpt-4o-mini".to_string(),
+                "deepseek/deepseek-chat".to_string(),
+                "mistralai/mistral-large".to_string(),
             ],
         }
     }
