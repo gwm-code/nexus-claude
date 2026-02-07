@@ -85,6 +85,7 @@ enum Commands {
         action: HierarchyAction,
     },
     /// OAuth authentication flow (PKCE)
+    #[command(name = "oauth")]
     OAuth {
         #[command(subcommand)]
         action: OAuthAction,
@@ -1161,8 +1162,9 @@ async fn run_command(command: Commands, json_mode: bool) -> Result<()> {
         Commands::OAuth { action } => {
             match action {
                 OAuthAction::Authorize { provider } => {
+                    let config_manager = ConfigManager::new()?;
                     // Start OAuth flow
-                    let auth_url = match oauth::start_oauth_flow(&provider) {
+                    let auth_url = match oauth::start_oauth_flow(&provider, config_manager.get()) {
                         Ok(url) => url,
                         Err(e) => {
                             let msg = format!("Failed to start OAuth flow: {}", e);
@@ -1193,7 +1195,7 @@ async fn run_command(command: Commands, json_mode: bool) -> Result<()> {
                     }
 
                     // Handle callback and get token
-                    let token = match oauth::handle_oauth_callback(&provider, 300) {
+                    let token = match oauth::handle_oauth_callback(&provider, config_manager.get(), 300) {
                         Ok(t) => t,
                         Err(e) => {
                             let msg = format!("OAuth authorization failed: {}", e);

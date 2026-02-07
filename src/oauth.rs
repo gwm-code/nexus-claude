@@ -11,46 +11,58 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const CALLBACK_PORT: u16 = 8765; // Local HTTP server port for OAuth callback
 const CALLBACK_URL: &str = "http://localhost:8765/callback";
 
-/// OAuth provider configuration
+/// OAuth provider configuration (URLs and scopes only)
 #[derive(Debug, Clone)]
 pub struct OAuthProvider {
-    pub name: &'static str,
+    pub name: String,
     pub auth_url: &'static str,
     pub token_url: &'static str,
-    pub client_id: &'static str, // Nexus-provided client ID
+    pub client_id: String,
+    pub client_secret: String,
     pub scopes: Vec<&'static str>,
 }
 
 impl OAuthProvider {
-    /// Get provider configuration by name
-    pub fn from_name(name: &str) -> Result<Self> {
-        match name.to_lowercase().as_str() {
-            "google" => Ok(Self {
-                name: "google",
-                auth_url: "https://accounts.google.com/o/oauth2/v2/auth",
-                token_url: "https://oauth2.googleapis.com/token",
-                // TODO: Replace with actual Nexus-registered OAuth app client ID
-                client_id: "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
-                scopes: vec!["openid", "email", "profile"],
-            }),
-            "claude" | "anthropic" => Ok(Self {
-                name: "anthropic",
-                auth_url: "https://auth.anthropic.com/oauth/authorize",
-                token_url: "https://auth.anthropic.com/oauth/token",
-                // TODO: Replace with actual Nexus-registered OAuth app client ID
-                client_id: "YOUR_ANTHROPIC_CLIENT_ID",
-                scopes: vec!["api"],
-            }),
-            "openai" => Ok(Self {
-                name: "openai",
-                auth_url: "https://auth.openai.com/authorize",
-                token_url: "https://auth.openai.com/oauth/token",
-                // TODO: Replace with actual Nexus-registered OAuth app client ID
-                client_id: "YOUR_OPENAI_CLIENT_ID",
-                scopes: vec!["api"],
-            }),
-            _ => Err(anyhow!("Unsupported OAuth provider: {}", name)),
-        }
+    /// Get provider configuration from stored config
+    pub fn from_config(name: &str, config: &crate::config::NexusConfig) -> Result<Self> {
+        let provider_config = config.providers.get(name)
+            .ok_or_else(|| anyhow!("Provider {} not found in config", name))?;
+
+        let client_id = provider_config.oauth_client_id.as_ref()
+            .ok_or_else(|| anyhow!("OAuth Client ID not configured for provider {}. Run: nexus config set-oauth {} <client-id> <client-secret>", name, name))?
+            .clone();
+
+        let client_secret = provider_config.oauth_client_secret.as_ref()
+            .ok_or_else(|| anyhow!("OAuth Client Secret not configured for provider {}. Run: nexus config set-oauth {} <client-id> <client-secret>", name, name))?
+            .clone();
+
+        let (auth_url, token_url, scopes) = match name.to_lowercase().as_str() {
+            "google" => (
+                "https://accounts.google.com/o/oauth2/v2/auth",
+                "https://oauth2.googleapis.com/token",
+                vec!["openid", "email", "profile"],
+            ),
+            "claude" | "anthropic" => (
+                "https://auth.anthropic.com/oauth/authorize",
+                "https://auth.anthropic.com/oauth/token",
+                vec!["api"],
+            ),
+            "openai" => (
+                "https://auth.openai.com/authorize",
+                "https://auth.openai.com/oauth/token",
+                vec!["api"],
+            ),
+            _ => return Err(anyhow!("Unsupported OAuth provider: {}", name)),
+        };
+
+        Ok(Self {
+            name: name.to_string(),
+            auth_url,
+            token_url,
+            client_id,
+            client_secret,
+            scopes,
+        })
     }
 }
 
@@ -95,8 +107,8 @@ impl PkceChallenge {
 }
 
 /// Start OAuth PKCE flow and return authorization URL
-pub fn start_oauth_flow(provider_name: &str) -> Result<String> {
-    let provider = OAuthProvider::from_name(provider_name)?;
+pub fn start_oauth_flow(provider_name: &str, config: &crate::config::NexusConfig) -> Result<String> {
+    let provider = OAuthProvider::from_config(provider_name, config)?;
     let pkce = PkceChallenge::generate()?;
 
     // Generate random state for CSRF protection
@@ -112,7 +124,7 @@ pub fn start_oauth_flow(provider_name: &str) -> Result<String> {
     let auth_url = format!(
         "{}?client_id={}&redirect_uri={}&response_type=code&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
         provider.auth_url,
-        urlencoding::encode(provider.client_id),
+        urlencoding::encode(&provider.client_id),
         urlencoding::encode(CALLBACK_URL),
         urlencoding::encode(&scope),
         state,
@@ -134,8 +146,8 @@ pub fn start_oauth_flow(provider_name: &str) -> Result<String> {
 }
 
 /// Handle OAuth callback and exchange code for token
-pub fn handle_oauth_callback(provider_name: &str, timeout_secs: u64) -> Result<OAuthToken> {
-    let provider = OAuthProvider::from_name(provider_name)?;
+pub fn handle_oauth_callback(provider_name: &str, config: &crate::config::NexusConfig, timeout_secs: u64) -> Result<OAuthToken> {
+    let provider = OAuthProvider::from_config(provider_name, config)?;
 
     println!("Starting local callback server on port {}...", CALLBACK_PORT);
     println!("Waiting for OAuth callback...");
@@ -222,10 +234,11 @@ fn exchange_code_for_token(provider: &OAuthProvider, code: &str, verifier: &str)
 
     // Build form-urlencoded body manually
     let body = format!(
-        "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
+        "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&client_secret={}&code_verifier={}",
         urlencoding::encode(code),
         urlencoding::encode(CALLBACK_URL),
-        urlencoding::encode(provider.client_id),
+        urlencoding::encode(&provider.client_id),
+        urlencoding::encode(&provider.client_secret),
         urlencoding::encode(verifier)
     );
 
