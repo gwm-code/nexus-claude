@@ -1,6 +1,6 @@
 use crate::context::FileAccessTracker;
 use crate::error::Result;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use crate::providers::{CompletionRequest, Message, Role};
 use crate::providers::retry::retry_with_backoff;
 use crate::providers::token_budget::TokenBudget;
@@ -99,25 +99,14 @@ impl Agent {
 
             for tool_call in tool_calls {
                 let result = self.execute_tool(&tool_call).await?;
-                
+
+                // Log to stderr (not stdout) so it doesn't pollute chat responses
                 if result.success {
-                    println!("  ✓ {} - Success", tool_call.name);
-                    if !result.output.is_empty() {
-                        println!("    Output: {}", 
-                            if result.output.len() > 200 { 
-                                format!("{}...", &result.output[..200]) 
-                            } else { 
-                                result.output.clone() 
-                            }
-                        );
-                    }
+                    debug!(tool = %tool_call.name, "Tool executed successfully");
                 } else {
-                    println!("  ✗ {} - Failed: {}", 
-                        tool_call.name, 
-                        result.error.as_ref().unwrap_or(&"Unknown error".to_string())
-                    );
+                    debug!(tool = %tool_call.name, error = ?result.error, "Tool execution failed");
                 }
-                
+
                 tool_results.push(result);
             }
 
