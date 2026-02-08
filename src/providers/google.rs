@@ -296,6 +296,21 @@ impl GoogleProvider {
                         "parts": [{"text": &msg.content}]
                     }));
                 }
+                crate::providers::Role::Tool => {
+                    // Tool responses need to be formatted as functionResponse
+                    let function_name = msg.name.as_deref().unwrap_or("unknown");
+                    contents.push(serde_json::json!({
+                        "role": "user",
+                        "parts": [{
+                            "functionResponse": {
+                                "name": function_name,
+                                "response": {
+                                    "result": &msg.content
+                                }
+                            }
+                        }]
+                    }));
+                }
                 _ => {
                     contents.push(serde_json::json!({
                         "role": "user",
