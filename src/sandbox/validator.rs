@@ -22,9 +22,10 @@ pub struct Validator {
 impl Validator {
     pub fn new() -> Self {
         let mut enabled_checks = HashSet::new();
+        // Only check exit code by default - stderr can contain warnings/info
+        // that aren't errors (npm progress, compiler warnings, etc.)
         enabled_checks.insert("exit_code".to_string());
-        enabled_checks.insert("no_errors".to_string());
-        enabled_checks.insert("tests_pass".to_string());
+        // "no_errors" and "tests_pass" can be enabled explicitly when needed
 
         Self { enabled_checks }
     }

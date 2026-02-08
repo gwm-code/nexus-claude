@@ -324,8 +324,8 @@ impl GoogleProvider {
             .collect::<Vec<_>>()
             .join("\n\n");
 
+        // Code Assist systemInstruction should NOT have a role field
         Some(serde_json::json!({
-            "role": "user",
             "parts": [{"text": combined}]
         }))
     }
@@ -338,8 +338,17 @@ impl GoogleProvider {
         temperature: Option<f32>,
         max_tokens: Option<u32>,
     ) -> serde_json::Value {
-        let contents = Self::convert_messages(messages);
+        let mut contents = Self::convert_messages(messages);
         let system_instruction = Self::extract_system_instruction(messages);
+
+        // Ensure we have at least one content message (API requires non-empty contents)
+        if contents.is_empty() {
+            contents.push(serde_json::json!({
+                "role": "user",
+                "parts": [{"text": ""}]
+            }));
+        }
+
         let user_prompt_id = uuid::Uuid::new_v4().to_string();
 
         let mut gen_config = serde_json::json!({});
