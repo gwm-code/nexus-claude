@@ -2283,31 +2283,18 @@ fn show_current_model(config_manager: &ConfigManager) {
 // ============================================================================
 
 async fn run_oauth_flow(provider: &str, config_manager: &ConfigManager) -> Result<String> {
-    // Get OAuth credentials from config
-    let provider_config = config_manager.get_provider(provider)
-        .ok_or_else(|| anyhow::anyhow!("Provider '{}' not configured", provider))?;
-
-    let client_id = provider_config.oauth_client_id.clone()
-        .ok_or_else(|| anyhow::anyhow!("OAuth client_id not set. Run 'nexus config set-oauth {} <client_id> <client_secret>' first", provider))?;
-
-    let client_secret = provider_config.oauth_client_secret.clone()
-        .ok_or_else(|| anyhow::anyhow!("OAuth client_secret not set. Run 'nexus config set-oauth {} <client_id> <client_secret>' first", provider))?;
-
-    // Create provider instance and generate OAuth URL
+    // For Google, use the gemini-cli compatible OAuth flow from oauth.rs
     match provider {
         "google" => {
-            let google_provider = providers::google::GoogleProvider::new(provider_config);
-            let auth_url = google_provider.generate_auth_url()?;
+            let auth_url = oauth::start_oauth_flow(provider, config_manager.get())?;
             Ok(auth_url)
         }
         "claude" => {
+            let provider_config = config_manager.get_provider(provider)
+                .ok_or_else(|| anyhow::anyhow!("Provider '{}' not configured", provider))?;
             let claude_provider = providers::claude::ClaudeProvider::new(provider_config);
             let auth_url = claude_provider.generate_auth_url()?;
             Ok(auth_url)
-        }
-        "openai" => {
-            // TODO: Implement OpenAI OAuth when openai.rs provider exists
-            Err(anyhow::anyhow!("OpenAI OAuth not yet implemented"))
         }
         _ => Err(anyhow::anyhow!("Provider '{}' does not support OAuth", provider)),
     }

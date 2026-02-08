@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 use std::time::{SystemTime, UNIX_EPOCH};
+use regex::Regex;
 
 const CALLBACK_PORT: u16 = 8765; // Local HTTP server port for OAuth callback
 const CALLBACK_URL: &str = "http://localhost:8765/callback";
@@ -28,20 +29,27 @@ impl OAuthProvider {
         let provider_config = config.providers.get(name)
             .ok_or_else(|| anyhow!("Provider {} not found in config", name))?;
 
-        let client_id = provider_config.oauth_client_id.as_ref()
-            .ok_or_else(|| anyhow!("OAuth Client ID not configured for provider {}. Run: nexus config set-oauth {} <client-id> <client-secret>", name, name))?
-            .clone();
-
-        let client_secret = provider_config.oauth_client_secret.as_ref()
-            .ok_or_else(|| anyhow!("OAuth Client Secret not configured for provider {}. Run: nexus config set-oauth {} <client-id> <client-secret>", name, name))?
-            .clone();
+        // Google uses official gemini-cli OAuth credentials (extracted from gemini-cli at runtime)
+        // These are public credentials for installed applications and authorized for Code Assist API
+        let (client_id, client_secret) = if name.to_lowercase() == "google" {
+            extract_gemini_cli_credentials()?
+        } else {
+            (
+                provider_config.oauth_client_id.as_ref()
+                    .ok_or_else(|| anyhow!("OAuth Client ID not configured for provider {}. Run: nexus config set-oauth {} <client-id> <client-secret>", name, name))?
+                    .clone(),
+                provider_config.oauth_client_secret.as_ref()
+                    .ok_or_else(|| anyhow!("OAuth Client Secret not configured for provider {}. Run: nexus config set-oauth {} <client-id> <client-secret>", name, name))?
+                    .clone(),
+            )
+        };
 
         let (auth_url, token_url, scopes) = match name.to_lowercase().as_str() {
             "google" => (
                 "https://accounts.google.com/o/oauth2/v2/auth",
                 "https://oauth2.googleapis.com/token",
                 vec![
-                    "https://www.googleapis.com/auth/generative-language",
+                    "https://www.googleapis.com/auth/cloud-platform",
                     "https://www.googleapis.com/auth/userinfo.email",
                     "https://www.googleapis.com/auth/userinfo.profile",
                 ],
@@ -269,6 +277,41 @@ pub fn check_oauth_status(provider_name: &str, config: &crate::config::NexusConf
     let provider_config = config.providers.get(provider_name)
         .ok_or_else(|| anyhow!("Provider {} not found in config", provider_name))?;
 
+    // For Google, also check ~/.gemini/oauth_creds.json (gemini-cli format)
+    if provider_name.to_lowercase() == "google" {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+        let gemini_creds_path = std::path::PathBuf::from(&home).join(".gemini/oauth_creds.json");
+
+        if gemini_creds_path.exists() {
+            if let Ok(contents) = std::fs::read_to_string(&gemini_creds_path) {
+                if let Ok(creds) = serde_json::from_str::<serde_json::Value>(&contents) {
+                    let has_token = creds.get("access_token").and_then(|t| t.as_str()).is_some();
+                    let expiry_ms = creds.get("expiry_date").and_then(|e| e.as_u64());
+
+                    let is_authorized = if let Some(exp_ms) = expiry_ms {
+                        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+                        has_token && exp_ms > now_ms
+                    } else {
+                        has_token
+                    };
+
+                    let expires_at_rfc3339 = expiry_ms.and_then(|ms| {
+                        let secs = (ms / 1000) as i64;
+                        chrono::DateTime::from_timestamp(secs, 0)
+                            .map(|dt| dt.to_rfc3339())
+                    });
+
+                    return Ok(OAuthStatus {
+                        authorized: is_authorized,
+                        provider: provider_name.to_string(),
+                        expires_at: expires_at_rfc3339,
+                    });
+                }
+            }
+        }
+    }
+
+    // Fallback: check nexus config
     let has_token = provider_config.oauth_token.is_some();
     let expires_at = provider_config.oauth_expires_at;
 
@@ -319,4 +362,52 @@ pub fn save_oauth_token(
     config_manager.save()?;
 
     Ok(())
+}
+
+/// Extract Google OAuth credentials from installed gemini-cli
+/// Falls back to hardcoded public values if extraction fails
+fn extract_gemini_cli_credentials() -> Result<(String, String)> {
+    // Try to find gemini-cli installation
+    let gemini_path = std::process::Command::new("which")
+        .arg("gemini")
+        .output()
+        .ok()
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|s| s.trim().to_string());
+
+    if let Some(path) = gemini_path {
+        if !path.is_empty() {
+            // Follow symlink to actual installation
+            if let Ok(real_path) = std::fs::read_link(&path) {
+                let oauth_file = real_path
+                    .parent()
+                    .and_then(|p| p.parent())
+                    .map(|p| p.join("node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js"));
+
+                if let Some(oauth_path) = oauth_file {
+                    if let Ok(content) = std::fs::read_to_string(&oauth_path) {
+                        // Extract credentials using regex (same as openclaw does)
+                        if let Ok(client_id_re) = Regex::new(r"(\d+-[a-z0-9]+\.apps\.googleusercontent\.com)") {
+                            if let Ok(client_secret_re) = Regex::new(r"(GOCSPX-[A-Za-z0-9_-]+)") {
+                                if let (Some(id_match), Some(secret_match)) = (
+                                    client_id_re.captures(&content),
+                                    client_secret_re.captures(&content),
+                                ) {
+                                    if let (Some(id), Some(secret)) = (id_match.get(1), secret_match.get(1)) {
+                                        return Ok((id.as_str().to_string(), secret.as_str().to_string()));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Require gemini-cli to be installed for Google OAuth
+    Err(anyhow!(
+        "Could not extract OAuth credentials from gemini-cli installation.\n\
+         Please ensure gemini-cli is installed: npm install -g @google/gemini-cli"
+    ))
 }
