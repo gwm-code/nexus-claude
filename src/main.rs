@@ -230,11 +230,23 @@ fn json_output(success: bool, data: serde_json::Value, error: Option<&str>) -> S
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Check for --json flag before initializing logging
+    let json_mode = std::env::args().any(|arg| arg == "--json");
+
     // Initialize structured logging
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("nexus=info"));
 
-    if std::env::var("NEXUS_LOG_JSON").is_ok() {
+    if json_mode {
+        // In JSON mode: send logs to stderr with no ANSI colors
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .with_target(false)
+            .with_ansi(false)
+            .with_writer(std::io::stderr)
+            .compact()
+            .init();
+    } else if std::env::var("NEXUS_LOG_JSON").is_ok() {
         tracing_subscriber::fmt()
             .json()
             .with_env_filter(env_filter)
