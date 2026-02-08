@@ -1415,10 +1415,30 @@ async fn run_command(command: Commands, json_mode: bool) -> Result<()> {
             let model = provider_config.default_model
                 .unwrap_or_else(|| provider.info().default_model.clone());
 
+            // Load memory context
+            let memory_path = std::env::var("HOME")
+                .map(|h| std::path::PathBuf::from(h).join(".config/nexus/memory"))
+                .unwrap_or_else(|_| std::path::PathBuf::from("~/.config/nexus/memory"));
+
+            let memory_context = if let Ok(mem) = MemorySystem::new(memory_path.clone()) {
+                match mem.get_context_for_query(&message).await {
+                    Ok(context) => format!("\n\n{}", context.format_for_llm()),
+                    Err(_) => String::new(),
+                }
+            } else {
+                String::new()
+            };
+
+            let system_prompt = if memory_context.is_empty() {
+                create_tool_system_prompt()
+            } else {
+                format!("{}{}", create_tool_system_prompt(), memory_context)
+            };
+
             let mut messages = vec![
                 Message {
                     role: Role::System,
-                    content: create_tool_system_prompt(),
+                    content: system_prompt,
                     name: None,
                 },
                 Message {
