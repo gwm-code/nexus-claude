@@ -821,6 +821,7 @@ impl Healer {
             temperature: Some(0.3),
             max_tokens: Some(800),
             stream: Some(false),
+                tools: None,
             extra_params: None,
         };
         
@@ -907,6 +908,7 @@ impl Healer {
             temperature: Some(0.2),
             max_tokens: Some(2500),
             stream: Some(false),
+                tools: None,
             extra_params: None,
         };
         

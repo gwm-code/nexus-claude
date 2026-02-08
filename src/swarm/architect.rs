@@ -84,6 +84,7 @@ impl ArchitectAgent {
             temperature: Some(0.3), // Lower temperature for consistent decomposition
             max_tokens: Some(4096),
             stream: Some(false),
+                tools: None,
             extra_params: None,
         };
 

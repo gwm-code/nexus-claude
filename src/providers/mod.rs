@@ -51,6 +51,8 @@ pub struct CompletionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<crate::executor::tools::Tool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub extra_params: Option<HashMap<String, serde_json::Value>>,
 }
 

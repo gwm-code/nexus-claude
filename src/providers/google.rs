@@ -337,6 +337,7 @@ impl GoogleProvider {
         messages: &[Message],
         temperature: Option<f32>,
         max_tokens: Option<u32>,
+        tools: Option<&[crate::executor::tools::Tool]>,
     ) -> serde_json::Value {
         let mut contents = Self::convert_messages(messages);
         let system_instruction = Self::extract_system_instruction(messages);
@@ -366,6 +367,21 @@ impl GoogleProvider {
 
         if let Some(sys) = system_instruction {
             request["systemInstruction"] = sys;
+        }
+
+        // Add tools if provided (Gemini native function calling)
+        if let Some(tools_list) = tools {
+            let function_declarations: Vec<serde_json::Value> = tools_list.iter().map(|tool| {
+                serde_json::json!({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.parameters,
+                })
+            }).collect();
+
+            request["tools"] = serde_json::json!([{
+                "function_declarations": function_declarations
+            }]);
         }
 
         serde_json::json!({
@@ -582,6 +598,7 @@ impl Provider for GoogleProvider {
             &request.messages,
             request.temperature,
             request.max_tokens,
+            request.tools.as_deref(),
         );
 
         let resp = self.request_with_retry("generateContent", &body, None).await?;
@@ -600,10 +617,32 @@ impl Provider for GoogleProvider {
         // Code Assist wraps response in {"response": {...}, "traceId": "..."}
         let response = &data["response"];
 
-        let content = response["candidates"][0]["content"]["parts"][0]["text"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let parts = &response["candidates"][0]["content"]["parts"];
+
+        // Extract text content and tool calls from parts
+        let mut content = String::new();
+        let mut tool_calls_list = Vec::new();
+
+        if let Some(parts_array) = parts.as_array() {
+            for part in parts_array {
+                // Text part
+                if let Some(text) = part["text"].as_str() {
+                    content.push_str(text);
+                }
+
+                // Function call part
+                if let Some(func_call) = part.get("functionCall") {
+                    if let Some(name) = func_call["name"].as_str() {
+                        let args = func_call["args"].clone();
+                        tool_calls_list.push(crate::executor::tools::ToolCall {
+                            id: format!("call_{}", uuid::Uuid::new_v4()),
+                            name: name.to_string(),
+                            arguments: args,
+                        });
+                    }
+                }
+            }
+        }
 
         let finish_reason = response["candidates"][0]["finishReason"]
             .as_str()
@@ -630,7 +669,7 @@ impl Provider for GoogleProvider {
             content,
             finish_reason,
             usage,
-            tool_calls: None,
+            tool_calls: if tool_calls_list.is_empty() { None } else { Some(tool_calls_list) },
         })
     }
 
@@ -652,6 +691,7 @@ impl Provider for GoogleProvider {
             &request.messages,
             request.temperature,
             request.max_tokens,
+            request.tools.as_deref(),
         );
 
         let resp = self

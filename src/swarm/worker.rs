@@ -142,6 +142,7 @@ impl WorkerAgent {
                 temperature: Some(0.7),
                 max_tokens: Some(budget.dynamic_max_tokens()),
                 stream: Some(false),
+                tools: None,
                 extra_params: None,
             };
 

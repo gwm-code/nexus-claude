@@ -855,6 +855,7 @@ async fn run_command(command: Commands, json_mode: bool) -> Result<()> {
                         temperature: Some(0.0),
                         max_tokens: Some(10),
                         stream: Some(false),
+                tools: None,
                         extra_params: None,
                     };
 

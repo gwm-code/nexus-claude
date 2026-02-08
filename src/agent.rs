@@ -55,13 +55,14 @@ impl Agent {
             // Estimate input tokens
             let input_estimate: u32 = messages.iter().map(|m| TokenBudget::estimate_tokens(&m.content)).sum();
 
-            // Send request to AI
+            // Send request to AI with tools
             let request = CompletionRequest {
                 model: model.clone(),
                 messages: messages.clone(),
                 temperature: Some(0.7),
                 max_tokens: Some(budget.dynamic_max_tokens()),
                 stream: Some(false),
+                tools: Some(crate::executor::tools::get_available_tools()),
                 extra_params: None,
             };
 
@@ -80,8 +81,11 @@ impl Agent {
             }
             info!(input_tokens = budget.used_input_tokens, output_tokens = budget.used_output_tokens, remaining = budget.remaining(), "Token usage");
 
-            // Check if response has tool calls
-            let tool_calls = parse_tool_calls(&response.content);
+            // Check if response has tool calls (use native tool_calls if available, fallback to parsing)
+            let tool_calls = response.tool_calls.clone().unwrap_or_else(|| {
+                // Fallback: parse from content for providers without native tool calling
+                parse_tool_calls(&response.content)
+            });
 
             if tool_calls.is_empty() {
                 // No tools - AI is done, return final answer
