@@ -64,7 +64,19 @@ impl ContextBundle {
             for memory in &self.relevant_memories {
                 match memory {
                     MemoryResult::Episodic { event } => {
-                        context.push_str(&format!("- Past event: {:?}\n", event));
+                        match event {
+                            crate::memory::MemoryEvent::Interaction { query, response, .. } => {
+                                if !query.is_empty() {
+                                    context.push_str(&format!("- Q: {}\n  A: {}\n", query, response));
+                                } else {
+                                    // Keyword search results (no query, just content)
+                                    context.push_str(&format!("- {}\n", response));
+                                }
+                            }
+                            _ => {
+                                context.push_str(&format!("- Past event: {:?}\n", event));
+                            }
+                        }
                     }
                     MemoryResult::Semantic { content, .. } => {
                         context.push_str(&format!("- {}\n", content));

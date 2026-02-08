@@ -225,11 +225,31 @@ impl MemorySystem {
         &self,
         query: &str,
     ) -> Result<types::ContextBundle> {
-        let relevant_memories = self.search(query, 10).await?;
-        
+        let mut relevant_memories = self.search(query, 10).await?;
+
+        // If semantic search found few results, use keyword search as fallback
+        if relevant_memories.len() < 3 {
+            let keyword_results = self.keyword_search(query, 5).await?;
+            tracing::info!(found = keyword_results.len(), "Keyword search results");
+            for text in keyword_results {
+                let preview = if text.len() > 100 { &text[..100] } else { &text };
+                tracing::info!(preview = %preview, "Keyword result preview");
+                relevant_memories.push(types::MemoryResult::Episodic {
+                    event: MemoryEvent::Interaction {
+                        query: String::new(),
+                        response: text,
+                        tools_used: Vec::new(),
+                        timestamp: std::time::SystemTime::now(),
+                        session_id: self.session_id.clone(),
+                    }
+                });
+            }
+            tracing::info!(total_memories = relevant_memories.len(), "Total memories after keyword search");
+        }
+
         // Get project facts
         let project_facts = self.graph.lock().map_err(|_| NexusError::Configuration("Graph mutex poisoned".to_string()))?.get_project_facts().await?;
-        
+
         // Get recent procedures
         let procedures = self.vector.search("procedure workflow", 5).await?;
 
@@ -242,6 +262,48 @@ impl MemorySystem {
                 .collect(),
             session_id: self.session_id.clone(),
         })
+    }
+
+    /// Search event files by keyword (fallback when semantic search fails)
+    pub async fn keyword_search(&self, query: &str, limit: usize) -> Result<Vec<String>> {
+        use std::fs;
+        use std::path::Path;
+
+        let events_dir = self.storage_path.join("events");
+        if !events_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let keywords: Vec<String> = query.to_lowercase()
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
+
+        let mut matches = Vec::new();
+
+        // Read all event files
+        if let Ok(entries) = fs::read_dir(&events_dir) {
+            for entry in entries.flatten() {
+                if let Ok(content) = fs::read_to_string(entry.path()) {
+                    // Check if any keyword matches
+                    let content_lower = content.to_lowercase();
+                    if keywords.iter().any(|kw| content_lower.contains(kw)) {
+                        // Extract content field if it's JSON
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                            if let Some(text) = json["content"].as_str() {
+                                matches.push(text.to_string());
+                            }
+                        }
+                    }
+                }
+
+                if matches.len() >= limit {
+                    break;
+                }
+            }
+        }
+
+        Ok(matches)
     }
 
     /// Run memory consolidation (cleanup old/summarize)
