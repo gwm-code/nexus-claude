@@ -459,23 +459,32 @@ impl GoogleProvider {
             if !path.is_empty() {
                 // Follow symlink to actual installation
                 if let Ok(real_path) = std::fs::read_link(&path) {
-                    let oauth_file = real_path
-                        .parent()
-                        .and_then(|p| p.parent())
-                        .map(|p| p.join("node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js"));
+                    // Try multiple possible locations for oauth2.js
+                    let possible_paths = vec![
+                        // Nested in gemini-cli's node_modules (most common)
+                        real_path.parent()
+                            .and_then(|p| p.parent())
+                            .map(|p| p.join("node_modules/@google/gemini-cli-core/dist/src/code_assist/oauth2.js")),
+                        // Direct sibling package
+                        real_path.parent()
+                            .and_then(|p| p.parent())
+                            .and_then(|p| p.parent())
+                            .map(|p| p.join("@google/gemini-cli-core/dist/src/code_assist/oauth2.js")),
+                    ];
 
-                    if let Some(oauth_path) = oauth_file {
+                    for oauth_path in possible_paths.into_iter().flatten() {
                         if let Ok(content) = std::fs::read_to_string(&oauth_path) {
-                            // Extract credentials using simple string matching
-                            if let Some(id_start) = content.find("apps.googleusercontent.com") {
-                                if let Some(id_line_start) = content[..id_start].rfind('\n') {
-                                    let id_line = &content[id_line_start..id_start + 30];
-                                    if let Some(id_match) = id_line.split('\'').nth(1).or_else(|| id_line.split('"').nth(1)) {
-                                        if let Some(secret_start) = content.find("GOCSPX-") {
-                                            if let Some(secret_line_start) = content[..secret_start].rfind('\n') {
-                                                let secret_line = &content[secret_line_start..secret_start + 50];
-                                                if let Some(secret_match) = secret_line.split('\'').nth(1).or_else(|| secret_line.split('"').nth(1)) {
-                                                    return Ok((id_match.to_string(), secret_match.to_string()));
+                                // Extract credentials using simple string matching
+                                if let Some(id_start) = content.find("apps.googleusercontent.com") {
+                                    if let Some(id_line_start) = content[..id_start].rfind('\n') {
+                                        let id_line = &content[id_line_start..id_start + 30];
+                                        if let Some(id_match) = id_line.split('\'').nth(1).or_else(|| id_line.split('"').nth(1)) {
+                                            if let Some(secret_start) = content.find("GOCSPX-") {
+                                                if let Some(secret_line_start) = content[..secret_start].rfind('\n') {
+                                                    let secret_line = &content[secret_line_start..secret_start + 50];
+                                                    if let Some(secret_match) = secret_line.split('\'').nth(1).or_else(|| secret_line.split('"').nth(1)) {
+                                                        return Ok((id_match.to_string(), secret_match.to_string()));
+                                                    }
                                                 }
                                             }
                                         }
@@ -483,7 +492,6 @@ impl GoogleProvider {
                                 }
                             }
                         }
-                    }
                 }
             }
         }
