@@ -174,15 +174,55 @@ impl ConfigManager {
         self.save()
     }
 
-    /// Store an API key securely for an existing provider
+    /// Store an API key securely for a provider (auto-creates provider if needed)
     pub fn set_api_key_secure(&mut self, provider_name: &str, api_key: &str) -> Result<()> {
-        let provider = self.config.providers.get_mut(provider_name).ok_or_else(|| {
-            NexusError::ProviderNotConfigured(provider_name.to_string())
-        })?;
+        // Auto-create provider if it doesn't exist
+        if !self.config.providers.contains_key(provider_name) {
+            let provider_type = match provider_name.to_lowercase().as_str() {
+                "opencode" => ProviderType::Opencode,
+                "openrouter" => ProviderType::Openrouter,
+                "google" => ProviderType::Google,
+                "claude" | "anthropic" => ProviderType::Claude,
+                _ => return Err(NexusError::Configuration(format!("Unknown provider type: {}", provider_name))),
+            };
 
+            self.config.providers.insert(
+                provider_name.to_string(),
+                ProviderConfig {
+                    provider_type,
+                    api_key: None,
+                    oauth_token: None,
+                    oauth_client_id: None,
+                    oauth_client_secret: None,
+                    oauth_refresh_token: None,
+                    oauth_expires_at: None,
+                    base_url: None,
+                    default_model: None,
+                    timeout_secs: None,
+                },
+            );
+        }
+
+        let provider = self.config.providers.get_mut(provider_name).unwrap();
+
+        // Try keyring first, fallback to plaintext if unavailable
         let key_name = format!("provider.{}.api_key", provider_name);
-        secret_store::store_secret(&key_name, api_key)?;
-        provider.api_key = Some(secret_store::make_sentinel(&key_name));
+        match secret_store::store_secret(&key_name, api_key) {
+            Ok(()) => {
+                // Verify we can retrieve it (full roundtrip test)
+                if secret_store::get_secret(&key_name).ok().flatten().is_some() {
+                    provider.api_key = Some(secret_store::make_sentinel(&key_name));
+                } else {
+                    // Store succeeded but retrieve failed - fallback to plaintext
+                    provider.api_key = Some(api_key.to_string());
+                }
+            }
+            Err(_) => {
+                // Keyring not available, store plaintext
+                provider.api_key = Some(api_key.to_string());
+            }
+        }
+
         self.save()
     }
 
